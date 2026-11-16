@@ -1,0 +1,38 @@
+{
+  "name": "d1-follow",
+  "version": "0.1.0",
+  "description": "Keep a Cloudflare Worker's Durable Objects beside its D1 database's primary as the primary moves.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/curlewlabs-com/d1-follow.git"
+  },
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema/*": "./schema/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "!src/creator-test-harness.ts",
+    "!src/sqlite-test-handle.ts",
+    "!src/test-timeout.ts",
+    "schema/*.sql",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bun test --no-install --timeout $(bun --no-install src/test-timeout.ts) src",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "prettier": "3.9.10",
+    "typescript": "6.0.3"
+  }
+}
