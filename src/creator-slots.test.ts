@@ -87,6 +87,23 @@ describe("a slot that answers from another colo", () => {
     );
   });
 
+  // The failed mark may still land before its deadline. Released in the same
+  // pass, the slot's object could take that late mark afterward and hold a
+  // marker nothing records, so the pass that took it out leaves the release
+  // to a later one.
+  test("whose mark failed is released by a later pass, not this one", async () => {
+    cls.unmarkable.add("scheduler-moved");
+    await world.pass(cls);
+    expect(cls.releasedNames).not.toContain("scheduler-moved");
+    expect(
+      (await readReleasePending(world.handle())).map((p) => p.name),
+    ).toEqual(["scheduler-moved"]);
+
+    world.clock += HOUR_MS;
+    await world.pass(cls);
+    expect(cls.releasedNames).toContain("scheduler-moved");
+  });
+
   // An object can answer without taking the mark: its storage holds a value
   // under the marker key that is no marker, or it moved again between the
   // observe and the mark. Either answer keeps nothing.

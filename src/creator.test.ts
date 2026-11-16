@@ -394,6 +394,56 @@ describe("the pass lease", () => {
   });
 });
 
+describe("an app's class", () => {
+  // An app can implement its class as a class instance, with prototype
+  // methods and private state. The pass wraps each class to fence its calls,
+  // and a wrapper that copied own properties would drop the prototype methods
+  // and rebind `this`; every member must reach the app's own object.
+  test("works when it is a class instance with private state", async () => {
+    await world.act();
+    const scripted = scriptedClass([ORD]);
+    class AppClass implements CreatorClass {
+      readonly #inner = scripted;
+      get code() {
+        return this.#inner.code;
+      }
+      get label() {
+        return this.#inner.label;
+      }
+      get releaseAfterMs() {
+        return this.#inner.releaseAfterMs;
+      }
+      get spares() {
+        return this.#inner.spares;
+      }
+      nameOf(number: number, regionHint: string) {
+        return this.#inner.nameOf(number, regionHint);
+      }
+      objectIdOf(name: string) {
+        return this.#inner.objectIdOf(name);
+      }
+      observe(name: string, hint: string | null) {
+        return this.#inner.observe(name, hint);
+      }
+      place(name: string, colo: Colo, deadlineMs: number) {
+        return this.#inner.place(name, colo, deadlineMs);
+      }
+      markInPlace(name: string, deadlineMs: number) {
+        return this.#inner.markInPlace(name, deadlineMs);
+      }
+      release(name: string, deadlineMs: number) {
+        return this.#inner.release(name, deadlineMs);
+      }
+    }
+    const report = await world.pass(new AppClass());
+    expect(report.failures).toEqual([]);
+    expect(report.created.map((o) => o.name)).toEqual([
+      "scheduler-test-enam-1",
+    ]);
+    expect(scripted.placed).toEqual(["scheduler-test-enam-1"]);
+  });
+});
+
 describe("keeping", () => {
   test("stamps a slot that answers from its colo", async () => {
     await world.seed("scheduler-serving", ORD, T0_MS - HOUR_MS);

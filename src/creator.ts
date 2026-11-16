@@ -258,36 +258,59 @@ export async function runCreatorPass(
   // let the next pass resolve the same name first, and the late call would
   // then undo that pass's work. So a pass with such a call keeps the lease
   // until it lapses on its own, which is after every deadline it issued.
-  let unsettled = false;
-  const fenced = deps.config.classes.map((cls): CreatorClass => ({
-    ...cls,
-    place: (name, colo, deadlineMs) =>
-      settled(cls.place(name, colo, deadlineMs)),
-    markInPlace: (name, deadlineMs) =>
-      settled(cls.markInPlace(name, deadlineMs)),
-    release: (name, deadlineMs) => settled(cls.release(name, deadlineMs)),
-  }));
-  const settled = async <T>(call: Promise<T>): Promise<T> => {
+  // For the same reason, no path empties a name in the pass whose call to it
+  // failed: the late call could land after the release and leave a marker
+  // nothing records. A later pass, once the deadline has passed, empties it.
+  const unsettled = new Set<string>();
+  const settled = async <T>(
+    name: string,
+    call: () => Promise<T>,
+  ): Promise<T> => {
     try {
-      return await call;
+      return await call();
     } catch (error) {
-      unsettled = true;
+      unsettled.add(name);
       throw error;
     }
   };
+  // Each member delegates to the app's own object, so a class instance keeps
+  // its prototype methods, getters and receiver.
+  const fenced = deps.config.classes.map((cls): CreatorClass => ({
+    get code() {
+      return cls.code;
+    },
+    get label() {
+      return cls.label;
+    },
+    get releaseAfterMs() {
+      return cls.releaseAfterMs;
+    },
+    get spares() {
+      return cls.spares;
+    },
+    nameOf: (number, regionHint) => cls.nameOf(number, regionHint),
+    objectIdOf: (name) => cls.objectIdOf(name),
+    observe: (name, hint) => cls.observe(name, hint),
+    place: (name, colo, deadlineMs) =>
+      settled(name, () => cls.place(name, colo, deadlineMs)),
+    markInPlace: (name, deadlineMs) =>
+      settled(name, () => cls.markInPlace(name, deadlineMs)),
+    release: (name, deadlineMs) =>
+      settled(name, () => cls.release(name, deadlineMs)),
+  }));
   try {
     await runLeasedPass(
       { ...deps, config: { ...deps.config, classes: fenced } },
       report,
       hold,
-      deadline,
+      { deadline, settling: (name) => unsettled.has(name) },
     );
   } catch (error) {
     if (!(error instanceof LeaseLost)) throw error;
     report.leaseLost = true;
     deps.log("[follow] creator pass stopped - another pass took its lease");
   } finally {
-    if (unsettled) {
+    if (unsettled.size > 0) {
       deps.log(
         "[follow] creator pass keeps its lease until it lapses - a call that failed may still land",
       );
@@ -341,14 +364,19 @@ async function releaseLease(
 }
 
 // `hold` renews the lease, and throws LeaseLost when another pass has taken
-// it. `deadline` is the deadline each call that acts on an object carries
-// (CreatorClass.place).
+// it. `fence.deadline` is the deadline each call that acts on an object
+// carries (CreatorClass.place); `fence.settling` names an object whose call
+// this pass failed and may still land, which nothing may empty this pass.
 async function runLeasedPass(
   deps: CreatorPassDeps,
   report: ReturnType<typeof emptyReport>,
   hold: () => Promise<void>,
-  deadline: () => number,
+  fence: {
+    readonly deadline: () => number;
+    readonly settling: (name: string) => boolean;
+  },
 ): Promise<void> {
+  const { deadline } = fence;
   const { db, config, log } = deps;
   const passStartMs = deps.now();
   const modes = await readModes(db);
@@ -390,6 +418,12 @@ async function runLeasedPass(
     }
     if (keep.has(name)) {
       log(`[follow] ${name} is protected or holds a lane - not emptied`);
+      return false;
+    }
+    if (fence.settling(name)) {
+      log(
+        `[follow] ${name} has a call this pass that failed and may still land - not emptied this pass`,
+      );
       return false;
     }
     return true;
@@ -689,7 +723,7 @@ async function runLeasedPass(
         opId,
         atMs: deps.now(),
         nameOf: (n) => cls.nameOf(n, regionHint),
-        objectIdOf: cls.objectIdOf,
+        objectIdOf: (name) => cls.objectIdOf(name),
       });
       try {
         const { colo } = await call(() => cls.observe(name, regionHint));
@@ -757,6 +791,14 @@ async function runLeasedPass(
       if (modes.modeOf("class", cls.code) !== "act") {
         report.wouldRelease.push(pending.name);
         log(`[follow] ${cls.label} dry-run - would release ${pending.name}`);
+        continue;
+      }
+      // Waiting in the release queue, but a call to it failed this pass and
+      // may still land (CreatorClass.place), so a later pass releases it.
+      if (fence.settling(pending.name)) {
+        log(
+          `[follow] ${cls.label} ${pending.name} has a call this pass that failed and may still land - released by a later pass`,
+        );
         continue;
       }
       await hold();
