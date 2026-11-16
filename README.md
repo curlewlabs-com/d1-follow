@@ -378,9 +378,11 @@ placement, a mark in place, a release) carries a deadline a tenth of the lease
 before the lease lapses, and the object refuses the call once its own clock
 reads past it. The margin leaves room for the creator's clock and the object's
 to disagree. A refused call is a failed one: its attempt stays open for the pass
-that holds the lease. Every path that empties an object, the cleanups included,
-first checks the names the creator must keep: the app's protected names and each
-lane's holder.
+that holds the lease. A call that failed may still land before its deadline, so
+a pass with one keeps its lease until the lease lapses, and empties no object it
+made such a call to; a later pass does. Every path that empties an object, the
+cleanups included, first checks the names the creator must keep: the app's
+protected names and each lane's holder.
 
 **Candidate colos.** The creator assumes nothing about which colos host Durable
 Objects or how many there are. Its probes are at most a fixed number a pass, and
