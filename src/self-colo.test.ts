@@ -3,6 +3,7 @@ import type { Colo } from "./colo";
 import {
   parseTraceColo,
   readTraceColo,
+  readTraceColoWithin,
   SelfColoCache,
   type TraceFetch,
   type TraceReading,
@@ -87,7 +88,7 @@ describe("readTraceColo", () => {
           reject(new Error("aborted")),
         );
       });
-    const reading = await readTraceColo(hanging, 5);
+    const reading = await readTraceColoWithin(hanging, 5);
     expect(reading).toEqual({ kind: "failed", reason: "trace read: aborted" });
   });
 });

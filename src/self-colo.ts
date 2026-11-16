@@ -51,9 +51,16 @@ export function parseTraceColo(body: string): Colo | null {
 
 // Never throws: a failed read is a reading of its own, so the caller can log it
 // in its own convention and the object serves where it is.
-export async function readTraceColo(
+export function readTraceColo(fetchTrace: TraceFetch): Promise<TraceReading> {
+  return readTraceColoWithin(fetchTrace, TRACE_TIMEOUT_MS);
+}
+
+// readTraceColo with its bound as an argument: module-internal, not part of the
+// package's surface, so its test can bound a hanging read in milliseconds
+// rather than wait out TRACE_TIMEOUT_MS.
+export async function readTraceColoWithin(
   fetchTrace: TraceFetch,
-  timeoutMs: number = TRACE_TIMEOUT_MS,
+  timeoutMs: number,
 ): Promise<TraceReading> {
   let body: string;
   try {
