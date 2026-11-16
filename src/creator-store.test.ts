@@ -695,6 +695,29 @@ describe("the ledger by object", () => {
     const kinds = await readLedgerKinds(db, ["id-slot-01", "id-unknown"]);
     expect(kinds).toEqual(new Map([["id-slot-01", "unregistered"]]));
   });
+  // A release that keeps failing appends an intent on every retry, for the
+  // life of the environment. The read returns one row per object however long
+  // that history grows, so a census costs what it asks about, not what was
+  // retried.
+  test("returns one row per object however many rows the object has", async () => {
+    const out = slot(STATELESS_CLASS, ORD, "slot-01");
+    await registerSlot(db, out, { opId: "a", kind: "created" });
+    await unregisterSlot(db, out, { opId: "b", atMs: AT_MS, detail: "moved" });
+    for (let retry = 0; retry < 20; retry++) {
+      await beginRelease(db, {
+        name: "slot-01",
+        classCode: STATELESS_CLASS,
+        objectId: "id-slot-01",
+        unregisteredAtMs: AT_MS,
+        opId: `r${retry}`,
+        atMs: AT_MS + 1 + retry,
+      });
+    }
+    const rows = sqlite
+      .query(CREATOR_SQL.readLedgerByObjects)
+      .all(JSON.stringify(["id-slot-01"]));
+    expect(rows).toEqual([{ object_id: "id-slot-01", kind: 6 }]);
+  });
 });
 
 describe("backoff", () => {

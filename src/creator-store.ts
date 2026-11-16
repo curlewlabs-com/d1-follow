@@ -53,10 +53,13 @@ export type LaneChangedBy = keyof typeof LANE_CHANGED_BY;
 export const CREATOR_SQL = {
   readSlots:
     "SELECT class_code, colo, name, object_id, registered_at_ms, verified_at_ms FROM follow_slot ORDER BY class_code, colo",
-  // Unordered: an ORDER BY could lead the planner to walk the ledger in rowid
-  // order instead of searching its object index.
+  // The latest row per requested object, picked in SQL through the object
+  // index, so an object whose release keeps failing costs a census one row
+  // however many intents its retries appended. Unordered: an ORDER BY could
+  // lead the planner to walk the ledger in rowid order instead of searching
+  // its object index.
   readLedgerByObjects:
-    "SELECT id, object_id, kind FROM follow_ledger WHERE object_id IN (SELECT value FROM json_each(?))",
+    "SELECT object_id, kind FROM follow_ledger WHERE id IN (SELECT max(id) FROM follow_ledger WHERE object_id IN (SELECT value FROM json_each(?)) GROUP BY object_id)",
   appendLedger:
     "INSERT INTO follow_ledger (op_id, at_ms, kind, class_code, name, object_id, colo, lane_code, lane_seq, from_name, changed_by, mode, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   takeNameNumber:
@@ -210,10 +213,8 @@ export async function readLedgerKinds(
     .prepare(CREATOR_SQL.readLedgerByObjects)
     .bind(JSON.stringify(objectIds))
     .all();
-  const latest = new Map<string, { id: number; kind: LedgerKind }>();
+  const latest = new Map<string, LedgerKind>();
   for (const row of results) {
-    const id = integerField(row, "id");
-    const objectId = stringField(row, "object_id");
     const code = integerField(row, "kind");
     const kind = (Object.keys(LEDGER_KIND) as LedgerKind[]).find(
       (k) => LEDGER_KIND[k] === code,
@@ -221,10 +222,9 @@ export async function readLedgerKinds(
     if (kind === undefined) {
       throw new CreatorStoreError(`kind is not a ledger kind: ${code}`);
     }
-    const seen = latest.get(objectId);
-    if (seen === undefined || id > seen.id) latest.set(objectId, { id, kind });
+    latest.set(stringField(row, "object_id"), kind);
   }
-  return new Map([...latest].map(([objectId, { kind }]) => [objectId, kind]));
+  return latest;
 }
 
 // A statement that appends one ledger row, for a caller to batch with the act
