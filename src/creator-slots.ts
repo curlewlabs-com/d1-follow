@@ -36,6 +36,8 @@ export async function observeSlots(pass: {
   readonly newOpId: () => string;
   // Renews the lease, throwing when another pass has taken it.
   readonly hold: () => Promise<void>;
+  // The deadline a call that acts carries (CreatorClass.place).
+  readonly deadline: () => number;
   readonly fail: (line: string) => void;
   readonly log: (line: string) => void;
 }): Promise<{
@@ -69,7 +71,7 @@ export async function observeSlots(pass: {
     await pass.hold();
     let answer: ObserveResult | null = null;
     try {
-      answer = await cls.markInPlace(slot.name);
+      answer = await cls.markInPlace(slot.name, pass.deadline());
     } catch (error) {
       pass.fail(`mark ${slot.name} in place: ${message(error)}`);
     }
@@ -106,7 +108,18 @@ export async function observeSlots(pass: {
     }
     const atMs = pass.now();
     if (colo === slot.colo) {
-      await stampVerified(db, { name: slot.name, opId: pass.newOpId(), atMs });
+      const stamped = await stampVerified(db, {
+        name: slot.name,
+        colo,
+        opId: pass.newOpId(),
+        atMs,
+      });
+      if (!stamped) {
+        pass.log(
+          `[follow] ${cls.label} slot ${slot.name} is no longer registered in ${colo} - left for the next pass`,
+        );
+        continue;
+      }
       registry.set(slot.name, { ...slot, verifiedAtMs: atMs });
       verified.push(slot.name);
       continue;

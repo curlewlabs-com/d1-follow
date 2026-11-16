@@ -65,14 +65,28 @@ export interface CreatorClass {
   ) => Promise<ObserveResult>;
   // Has the object write its placement marker for `colo`, so it does not
   // cease once idle. Rejects when the object refused or the call failed.
-  readonly place: (name: string, colo: Colo) => Promise<void>;
+  //
+  // This call, markInPlace and release each carry `deadlineMs`, and the
+  // object must refuse the call once its own clock reads past it. The pass
+  // checks its lease after every call, but cannot undo a call that takes
+  // effect after the lease lapsed and another pass took over; the deadline
+  // ends inside the lease, so a late call is refused instead of undoing the
+  // newer pass's work.
+  readonly place: (
+    name: string,
+    colo: Colo,
+    deadlineMs: number,
+  ) => Promise<void>;
   // Has the object write its placement marker for the colo it answers from
   // now, and resolves what it then answers; it never empties the object. The
   // mark took only when the answer's marker names the colo it answered from.
   // Rejects when the call failed, as it does against an older build.
-  readonly markInPlace: (name: string) => Promise<ObserveResult>;
+  readonly markInPlace: (
+    name: string,
+    deadlineMs: number,
+  ) => Promise<ObserveResult>;
   // Has the object empty its storage. Rejects when it refused or failed.
-  readonly release: (name: string) => Promise<void>;
+  readonly release: (name: string, deadlineMs: number) => Promise<void>;
 }
 
 // An object's answer to an observe call.
@@ -204,41 +218,105 @@ function message(error: unknown): string {
 // registered slot acts on nothing, so the lease is not renewed around it: the
 // stamp an answer leads to never moves a slot's verification back, and taking a
 // slot out of the registry renews the lease first and goes ahead only while the
-// slot carries the verification the pass read. A call slower than the lease can
-// still land while the next pass runs; what it began stays open in the ledger,
-// for the pass holding the lease to resolve.
+// slot carries the verification the pass read. A call slower than the lease would
+// otherwise still land while the next pass runs, so each call that acts
+// carries a deadline inside the lease, which the object refuses once past
+// (CreatorClass.place); what a refused or unanswered call began stays open in
+// the ledger, for the pass holding the lease to resolve.
 export async function runCreatorPass(
   deps: CreatorPassDeps,
 ): Promise<CreatorPassReport> {
   const holder = deps.newOpId();
   const leaseMs = deps.config.passIntervalMs / 2;
   const report = emptyReport();
+  const claimedAtMs = deps.now();
   const claimed = await claimPass(deps.db, {
     holder,
-    nowMs: deps.now(),
+    nowMs: claimedAtMs,
     leaseMs,
   });
   if (!claimed) {
     deps.log("[follow] creator pass skipped - another pass holds the lease");
     return { ...report, skipped: true };
   }
+  // When the lease this pass holds lapses: set by the claim, moved by each
+  // renewal.
+  let leaseUntilMs = claimedAtMs + leaseMs;
   const hold = async (): Promise<void> => {
-    const held = await renewPass(deps.db, {
-      holder,
-      untilMs: deps.now() + leaseMs,
-    });
+    const untilMs = deps.now() + leaseMs;
+    const held = await renewPass(deps.db, { holder, untilMs });
     if (!held) {
       throw new LeaseLost();
     }
+    leaseUntilMs = untilMs;
   };
+  // A tenth of the lease before it lapses, which leaves room for the creator's
+  // clock and an object's to disagree.
+  const deadline = (): number => leaseUntilMs - leaseMs / 10;
+  // A call that acts and fails here may still be in flight, and may land at
+  // the object any time before its deadline. Giving the lease up early would
+  // let the next pass resolve the same name first, and the late call would
+  // then undo that pass's work. So a pass with such a call keeps the lease
+  // until it lapses on its own, which is after every deadline it issued.
+  // For the same reason, no path empties a name in the pass whose call to it
+  // failed: the late call could land after the release and leave a marker
+  // nothing records. A later pass, once the deadline has passed, empties it.
+  const unsettled = new Set<string>();
+  const settled = async <T>(
+    name: string,
+    call: () => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await call();
+    } catch (error) {
+      unsettled.add(name);
+      throw error;
+    }
+  };
+  // Each member delegates to the app's own object, so a class instance keeps
+  // its prototype methods, getters and receiver.
+  const fenced = deps.config.classes.map((cls): CreatorClass => ({
+    get code() {
+      return cls.code;
+    },
+    get label() {
+      return cls.label;
+    },
+    get releaseAfterMs() {
+      return cls.releaseAfterMs;
+    },
+    get spares() {
+      return cls.spares;
+    },
+    nameOf: (number, regionHint) => cls.nameOf(number, regionHint),
+    objectIdOf: (name) => cls.objectIdOf(name),
+    observe: (name, hint) => cls.observe(name, hint),
+    place: (name, colo, deadlineMs) =>
+      settled(name, () => cls.place(name, colo, deadlineMs)),
+    markInPlace: (name, deadlineMs) =>
+      settled(name, () => cls.markInPlace(name, deadlineMs)),
+    release: (name, deadlineMs) =>
+      settled(name, () => cls.release(name, deadlineMs)),
+  }));
   try {
-    await runLeasedPass(deps, report, hold);
+    await runLeasedPass(
+      { ...deps, config: { ...deps.config, classes: fenced } },
+      report,
+      hold,
+      { deadline, settling: (name) => unsettled.has(name) },
+    );
   } catch (error) {
     if (!(error instanceof LeaseLost)) throw error;
     report.leaseLost = true;
     deps.log("[follow] creator pass stopped - another pass took its lease");
   } finally {
-    await releaseLease(deps, holder);
+    if (unsettled.size > 0) {
+      deps.log(
+        "[follow] creator pass keeps its lease until it lapses - a call that failed may still land",
+      );
+    } else {
+      await releaseLease(deps, holder);
+    }
   }
   return report;
 }
@@ -286,12 +364,19 @@ async function releaseLease(
 }
 
 // `hold` renews the lease, and throws LeaseLost when another pass has taken
-// it.
+// it. `fence.deadline` is the deadline each call that acts on an object
+// carries (CreatorClass.place); `fence.settling` names an object whose call
+// this pass failed and may still land, which nothing may empty this pass.
 async function runLeasedPass(
   deps: CreatorPassDeps,
   report: ReturnType<typeof emptyReport>,
   hold: () => Promise<void>,
+  fence: {
+    readonly deadline: () => number;
+    readonly settling: (name: string) => boolean;
+  },
 ): Promise<void> {
+  const { deadline } = fence;
   const { db, config, log } = deps;
   const passStartMs = deps.now();
   const modes = await readModes(db);
@@ -312,6 +397,37 @@ async function runLeasedPass(
     report,
   });
   const classOf = new Map(config.classes.map((c) => [c.code, c]));
+  // The names no release may empty: the app's protected names and each lane's
+  // holder. Read once a pass, when the first release needs it, and shared by
+  // every path that empties an object, so a cleanup obeys the same list as the
+  // release step. A read that fails refuses the cleanups that asked and fails
+  // the release step as it always has.
+  let keepRead: Promise<ReadonlySet<string>> | null = null;
+  const keepNames = (): Promise<ReadonlySet<string>> =>
+    (keepRead ??= readLaneHolders(deps.appDb).then(
+      (holders) => new Set([...config.protectedNames, ...holders]),
+    ));
+  // Whether a cleanup may empty `name`, logging why not when it may not.
+  const mayEmpty = async (name: string): Promise<boolean> => {
+    let keep: ReadonlySet<string>;
+    try {
+      keep = await keepNames();
+    } catch (error) {
+      fail(`read the names to keep before emptying ${name}: ${message(error)}`);
+      return false;
+    }
+    if (keep.has(name)) {
+      log(`[follow] ${name} is protected or holds a lane - not emptied`);
+      return false;
+    }
+    if (fence.settling(name)) {
+      log(
+        `[follow] ${name} has a call this pass that failed and may still land - not emptied this pass`,
+      );
+      return false;
+    }
+    return true;
+  };
   // A class that gained or lost a slot this pass starts its backoff over.
   const changed = new Set<number>();
 
@@ -361,6 +477,7 @@ async function runLeasedPass(
     now: deps.now,
     newOpId: deps.newOpId,
     hold,
+    deadline,
     fail,
     log,
   });
@@ -377,6 +494,7 @@ async function runLeasedPass(
     now: deps.now,
     newOpId: deps.newOpId,
     hold,
+    deadline,
     fail,
     log,
   });
@@ -433,7 +551,7 @@ async function runLeasedPass(
     // A lease lost during the call leaves the placed object alone: emptying it
     // could undo the pass now holding the lease, which may already have kept
     // it. The attempt stays open, and resolving it keeps or empties the object.
-    await call(() => cls.place(name, colo));
+    await call(() => cls.place(name, colo, deadline()));
     const atMs = deps.now();
     const slot: Slot = {
       classCode: cls.code,
@@ -450,15 +568,17 @@ async function runLeasedPass(
       });
     } catch (error) {
       // Placed but not registered: a marked object outside the registry would
-      // never cease and never be released, so it is emptied. Its intent stays
-      // open for a later pass.
-      await call(() =>
-        cls.release(name).catch((releaseError: unknown) => {
-          log(
-            `[follow] failed - empty unregistered ${name}: ${message(releaseError)}`,
-          );
-        }),
-      );
+      // never cease and never be released, so it is emptied, unless the keep
+      // list names it. Its intent stays open for a later pass either way.
+      if (await mayEmpty(name)) {
+        await call(() =>
+          cls.release(name, deadline()).catch((releaseError: unknown) => {
+            log(
+              `[follow] failed - empty unregistered ${name}: ${message(releaseError)}`,
+            );
+          }),
+        );
+      }
       throw error;
     }
     changed.add(cls.code);
@@ -467,14 +587,15 @@ async function runLeasedPass(
       // leave the class short in this pass's count, or the next creation would
       // register a spare beyond the count.
       occupied.set(cls.code, (occupied.get(cls.code) ?? 0) + 1);
-      await stampSpareVerified(db, { name, opId, atMs });
-      ready.set(cls.code, (ready.get(cls.code) ?? 0) + 1);
+      if (await stampSpareVerified(db, { name, colo, opId, atMs })) {
+        ready.set(cls.code, (ready.get(cls.code) ?? 0) + 1);
+      }
       report.sparesCreated.push({ classCode: cls.code, name, colo });
       log(`[follow] ${cls.label} spare ${name} created in ${colo}`);
       return;
     }
-    await stampVerified(db, { name, opId, atMs });
-    registry.set(name, { ...slot, verifiedAtMs: atMs });
+    const stamped = await stampVerified(db, { name, colo, opId, atMs });
+    registry.set(name, { ...slot, verifiedAtMs: stamped ? atMs : null });
     held.set(cls.code, (held.get(cls.code) ?? new Set<Colo>()).add(colo));
     report.created.push({ classCode: cls.code, name, colo });
     log(`[follow] ${cls.label} slot ${name} created in ${colo}`);
@@ -546,11 +667,15 @@ async function runLeasedPass(
       const role = roleOf(cls, colo);
       if (colo !== null && role !== null) {
         await keep(cls, intent.name, colo, intent.opId, role);
-      } else {
+      } else if (await mayEmpty(intent.name)) {
         // An interrupted pass may have placed it before its answer was lost;
         // emptying an object that holds nothing is harmless.
-        await call(() => cls.release(intent.name));
+        await call(() => cls.release(intent.name, deadline()));
         await spend(cls, intent.name, colo, intent.opId);
+      } else {
+        // Refused: the attempt stays open, and the class makes no new ones
+        // until it resolves, as for any attempt this pass cannot resolve.
+        unresolved.add(cls.code);
       }
     } catch (error) {
       if (error instanceof LeaseLost) throw error;
@@ -598,6 +723,7 @@ async function runLeasedPass(
         opId,
         atMs: deps.now(),
         nameOf: (n) => cls.nameOf(n, regionHint),
+        objectIdOf: (name) => cls.objectIdOf(name),
       });
       try {
         const { colo } = await call(() => cls.observe(name, regionHint));
@@ -653,15 +779,12 @@ async function runLeasedPass(
   // Release what has been out of the registry long enough and holds no lane.
   // Each class reads only its due releases, at most the attempts bound, so a
   // backlog costs a pass no more reads, calls or ledger rows than that.
-  const keepNames = [
-    ...config.protectedNames,
-    ...(await readLaneHolders(deps.appDb)),
-  ];
+  const keepList = [...(await keepNames())];
   for (const cls of config.classes) {
     const due = await readReleaseDue(db, {
       classCode: cls.code,
       unregisteredByMs: passStartMs - cls.releaseAfterMs,
-      keep: keepNames,
+      keep: keepList,
       limit: config.attemptsPerClassPerPass,
     });
     for (const pending of due) {
@@ -670,13 +793,21 @@ async function runLeasedPass(
         log(`[follow] ${cls.label} dry-run - would release ${pending.name}`);
         continue;
       }
+      // Waiting in the release queue, but a call to it failed this pass and
+      // may still land (CreatorClass.place), so a later pass releases it.
+      if (fence.settling(pending.name)) {
+        log(
+          `[follow] ${cls.label} ${pending.name} has a call this pass that failed and may still land - released by a later pass`,
+        );
+        continue;
+      }
       await hold();
       const opId = deps.newOpId();
       await beginRelease(db, { ...pending, opId, atMs: deps.now() });
       // A lease lost during the call leaves the release unrecorded; the pass
       // now holding the lease releases it again, harmlessly, and records it.
       try {
-        await call(() => cls.release(pending.name));
+        await call(() => cls.release(pending.name, deadline()));
       } catch (error) {
         if (error instanceof LeaseLost) throw error;
         // The release's intent stands; a later pass tries again.

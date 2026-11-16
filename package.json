@@ -1,6 +1,6 @@
 {
   "name": "d1-follow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Keep a Cloudflare Worker's Durable Objects beside its D1 database's primary as the primary moves.",
   "license": "MIT",
   "repository": {

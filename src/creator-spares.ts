@@ -47,6 +47,8 @@ export async function observeSpares(pass: {
   readonly now: () => number;
   readonly newOpId: () => string;
   readonly hold: () => Promise<void>;
+  // The deadline a call that acts carries (CreatorClass.place).
+  readonly deadline: () => number;
   readonly fail: (line: string) => void;
   readonly log: (line: string) => void;
 }): Promise<{
@@ -69,7 +71,7 @@ export async function observeSpares(pass: {
     await pass.hold();
     let answer: ObserveResult | null = null;
     try {
-      answer = await cls.markInPlace(spare.name);
+      answer = await cls.markInPlace(spare.name, pass.deadline());
     } catch (error) {
       pass.fail(`mark spare ${spare.name} in place: ${message(error)}`);
     }
@@ -96,11 +98,18 @@ export async function observeSpares(pass: {
       seen.colo === spare.colo &&
       seen.markedColo === spare.colo
     ) {
-      await stampSpareVerified(db, {
+      const stamped = await stampSpareVerified(db, {
         name: spare.name,
+        colo: spare.colo,
         opId: pass.newOpId(),
         atMs,
       });
+      if (!stamped) {
+        pass.log(
+          `[follow] ${cls.label} spare ${spare.name} is no longer registered in ${spare.colo} - left for the next pass`,
+        );
+        continue;
+      }
       verified.push(spare.name);
       kept.push({ ...spare, verifiedAtMs: atMs });
       continue;
@@ -124,11 +133,18 @@ export async function observeSpares(pass: {
       (await remark(cls, spare))
     ) {
       const markedAtMs = pass.now();
-      await stampSpareVerified(db, {
+      const stamped = await stampSpareVerified(db, {
         name: spare.name,
+        colo: spare.colo,
         opId: pass.newOpId(),
         atMs: markedAtMs,
       });
+      if (!stamped) {
+        pass.log(
+          `[follow] ${cls.label} spare ${spare.name} is no longer registered in ${spare.colo} - left for the next pass`,
+        );
+        continue;
+      }
       verified.push(spare.name);
       remarked.push(spare.name);
       kept.push({ ...spare, verifiedAtMs: markedAtMs });

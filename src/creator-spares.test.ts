@@ -60,11 +60,14 @@ describe("observing the spares", () => {
   // An emptied spare answers from its colo with no marker. Kept verified, it
   // would be a failover's standby that ceases at its next idle period. One
   // that cannot take a new mark, as an older build's cannot, is taken out.
+  // The failed mark may still land before its deadline, so the spare is
+  // released by a later pass, never by the one whose mark failed: a release
+  // the late mark followed would leave a marker nothing records.
   test.each<[string, Colo | undefined]>([
     ["holding no marker", undefined],
     ["holding a marker for another colo", IAD],
   ])(
-    "takes out and releases a spare answering from its colo %s",
+    "takes out a spare answering from its colo %s, releasing it a pass later",
     async (_, marker) => {
       await world.act();
       await spare("scheduler-spare", ORD, T0_MS - HOUR_MS);
@@ -77,7 +80,11 @@ describe("observing the spares", () => {
         { classCode: SCHEDULER, name: "scheduler-spare", colo: ORD },
       ]);
       expect(await readSpares(world.handle())).toEqual([]);
-      expect(cls.releasedNames).toEqual(["scheduler-spare"]);
+      expect(cls.releasedNames).toEqual([]);
+
+      world.clock += HOUR_MS;
+      await world.pass(cls);
+      expect(cls.releasedNames).toContain("scheduler-spare");
     },
   );
 
@@ -360,6 +367,7 @@ describe("keeping spares beside the primary", () => {
       if (name === "scheduler-old-mia") {
         await stampSpareVerified(world.handle(), {
           name: "scheduler-old-iad",
+          colo: IAD,
           opId: "other-pass",
           atMs: T0_MS + 1,
         });
@@ -394,6 +402,7 @@ describe("keeping spares beside the primary", () => {
       if (name === "scheduler-spare") {
         await stampSpareVerified(world.handle(), {
           name: "scheduler-old-iad",
+          colo: IAD,
           opId: "other-pass",
           atMs: T0_MS + 1,
         });

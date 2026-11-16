@@ -53,22 +53,29 @@ export type LaneChangedBy = keyof typeof LANE_CHANGED_BY;
 export const CREATOR_SQL = {
   readSlots:
     "SELECT class_code, colo, name, object_id, registered_at_ms, verified_at_ms FROM follow_slot ORDER BY class_code, colo",
-  // Unordered: an ORDER BY could lead the planner to walk the ledger in rowid
-  // order instead of searching its object index.
+  // The latest row per requested object, one indexed seek each: the object
+  // index orders an object's rows by id, so `ORDER BY id DESC LIMIT 1` reads
+  // one entry, however many intents an object's failing releases appended. A
+  // grouped max(id) would return one row too, but SQLite drops its min/max
+  // shortcut under GROUP BY and reads the whole history. An object the ledger
+  // never names comes back with a null kind, which readLedgerKinds leaves out;
+  // filtering it here would run the seek a second time.
   readLedgerByObjects:
-    "SELECT id, object_id, kind FROM follow_ledger WHERE object_id IN (SELECT value FROM json_each(?))",
+    "SELECT requested.value AS object_id, (SELECT kind FROM follow_ledger WHERE follow_ledger.object_id = requested.value ORDER BY follow_ledger.id DESC LIMIT 1) AS kind FROM json_each(?) AS requested",
   appendLedger:
     "INSERT INTO follow_ledger (op_id, at_ms, kind, class_code, name, object_id, colo, lane_code, lane_seq, from_name, changed_by, mode, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   takeNameNumber:
     "INSERT INTO follow_name_counter (class_code, last_number) VALUES (?, 1) ON CONFLICT (class_code) DO UPDATE SET last_number = last_number + 1 RETURNING last_number",
   insertSlot:
     "INSERT INTO follow_slot (class_code, colo, name, object_id, registered_at_ms, verified_at_ms) VALUES (?, ?, ?, ?, ?, ?)",
+  // Both stamp statements match the slot only in the colo its answer came from
+  // (stampVerified says why).
   recordFirstVerification:
-    "INSERT INTO follow_ledger (op_id, at_ms, kind, class_code, name, object_id, colo) SELECT ?, ?, ?, class_code, name, object_id, colo FROM follow_slot WHERE name = ? AND verified_at_ms IS NULL",
+    "INSERT INTO follow_ledger (op_id, at_ms, kind, class_code, name, object_id, colo) SELECT ?, ?, ?, class_code, name, object_id, colo FROM follow_slot WHERE name = ? AND colo = ? AND verified_at_ms IS NULL",
   // Never moves the time back (stampVerified says why); a slot not yet
   // verified takes the stamp as it is.
   stampVerified:
-    "UPDATE follow_slot SET verified_at_ms = max(ifnull(verified_at_ms, 0), ?) WHERE name = ?",
+    "UPDATE follow_slot SET verified_at_ms = max(ifnull(verified_at_ms, 0), ?) WHERE name = ? AND colo = ? RETURNING name",
   // Each of an unregister's statements matches the slot only while its
   // verification is the one the pass decided on (unregisterSlot says why), and
   // the ledger row and the release-queue row are copied from the slot ahead of
@@ -208,10 +215,9 @@ export async function readLedgerKinds(
     .prepare(CREATOR_SQL.readLedgerByObjects)
     .bind(JSON.stringify(objectIds))
     .all();
-  const latest = new Map<string, { id: number; kind: LedgerKind }>();
+  const latest = new Map<string, LedgerKind>();
   for (const row of results) {
-    const id = integerField(row, "id");
-    const objectId = stringField(row, "object_id");
+    if ((row as Record<string, unknown>)["kind"] === null) continue;
     const code = integerField(row, "kind");
     const kind = (Object.keys(LEDGER_KIND) as LedgerKind[]).find(
       (k) => LEDGER_KIND[k] === code,
@@ -219,10 +225,9 @@ export async function readLedgerKinds(
     if (kind === undefined) {
       throw new CreatorStoreError(`kind is not a ledger kind: ${code}`);
     }
-    const seen = latest.get(objectId);
-    if (seen === undefined || id > seen.id) latest.set(objectId, { id, kind });
+    latest.set(stringField(row, "object_id"), kind);
   }
-  return new Map([...latest].map(([objectId, { kind }]) => [objectId, kind]));
+  return latest;
 }
 
 // A statement that appends one ledger row, for a caller to batch with the act
@@ -257,7 +262,10 @@ export function ledgerStatement(
 // run, and its number stays taken: a number is taken once whatever then happens
 // to the name, so a name is never reused. `nameOf` must give names no other
 // class's gives, since a name keys the registry and the open intents across
-// classes.
+// classes. The intent records the name's object id too, from `objectIdOf`,
+// because the census finds the ledger's account of an object by its id: an
+// object an interrupted creation left holding data is then reported as that
+// unresolved attempt, not as one nothing accounts for.
 export async function beginCreation(
   db: SqlDatabase,
   attempt: {
@@ -265,6 +273,7 @@ export async function beginCreation(
     readonly opId: string;
     readonly atMs: number;
     readonly nameOf: (number: number) => string;
+    readonly objectIdOf: (name: string) => string;
   },
 ): Promise<{ readonly number: number; readonly name: string }> {
   const { results } = await db
@@ -288,6 +297,7 @@ export async function beginCreation(
       kind: "creation_intent",
       classCode: attempt.classCode,
       name,
+      objectId: attempt.objectIdOf(name),
     }),
     db
       .prepare(CREATOR_SQL.openIntent)
@@ -361,27 +371,40 @@ export async function registerSlot(
   ]);
 }
 
-// Stamps a slot's latest answer from its own colo. Only the first stamp is a
-// verification change, so only it writes a ledger row, in the same batch;
-// later stamps refresh the time, and never move it back, since a pass stamps
-// without holding its lease and a stale one can land after a newer answer. A
-// slot that stops answering from its colo leaves the registry through
-// unregisterSlot, which records that change.
+// Stamps a slot's latest answer from `colo`, its own, and true when the slot
+// was still registered there. Only the first stamp is a verification change,
+// so only it writes a ledger row, in the same batch; later stamps refresh the
+// time, and never move it back, since a pass stamps without holding its lease
+// and a stale one can land after a newer answer. The colo binds the stamp to
+// the row the answer was about: a pass that lost its lease can stamp after
+// another pass moved the slot's row to a new colo, and an answer from the old
+// colo says nothing about the new one. A slot that stops answering from its
+// colo leaves the registry through unregisterSlot, which records that change.
 export async function stampVerified(
   db: SqlDatabase,
   stamp: {
     readonly name: string;
+    readonly colo: Colo;
     readonly opId: string;
     readonly atMs: number;
   },
-): Promise<void> {
-  await db.batch([
+): Promise<boolean> {
+  const results = await db.batch([
     // Ahead of the update, which is what makes "first" observable.
     db
       .prepare(CREATOR_SQL.recordFirstVerification)
-      .bind(stamp.opId, stamp.atMs, LEDGER_KIND.verified, stamp.name),
-    db.prepare(CREATOR_SQL.stampVerified).bind(stamp.atMs, stamp.name),
+      .bind(
+        stamp.opId,
+        stamp.atMs,
+        LEDGER_KIND.verified,
+        stamp.name,
+        stamp.colo,
+      ),
+    db
+      .prepare(CREATOR_SQL.stampVerified)
+      .bind(stamp.atMs, stamp.name, stamp.colo),
   ]);
+  return returnedRows(results[1], "stamp's update").length > 0;
 }
 
 // Takes a slot out of the registry with the ledger row that says why, in one

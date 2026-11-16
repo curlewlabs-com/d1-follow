@@ -23,6 +23,7 @@ import {
   T0_MS,
   scriptedClass,
 } from "./creator-test-harness";
+import { addCandidateColo } from "./candidate-store";
 import { claimPass } from "./pass-lease";
 
 let world: CreatorWorld;
@@ -168,8 +169,8 @@ describe("the pass lease", () => {
     const cls = scriptedClass([ORD, ORD]);
     const slowPlace: CreatorClass = {
       ...cls,
-      place: async (name, colo) => {
-        await cls.place(name, colo);
+      place: async (name, colo, deadlineMs) => {
+        await cls.place(name, colo, deadlineMs);
         world.clock += HOUR_MS;
         await claimPass(world.handle(), {
           holder: "other-pass",
@@ -188,6 +189,134 @@ describe("the pass lease", () => {
     const next = await world.pass(cls);
     expect(next.created.map((o) => o.name)).toEqual(["scheduler-test-enam-1"]);
     expect(cls.releasedNames).toEqual([]);
+  });
+
+  // A call the pass makes can take effect after its lease lapsed and another
+  // pass took over, which no check after the call can undo. So each call that
+  // acts carries a deadline that ends inside the lease the pass holds when it
+  // makes the call: an object that refuses past it can never act for a pass
+  // that no longer holds the lease.
+  test("each call that acts carries a deadline inside the pass's lease", async () => {
+    await world.act();
+    // One slot that moved into a candidate colo (marked in place), one that
+    // moved out of every candidate (released), and a gap probed (placed).
+    await world.seed("scheduler-moved", MIA, T0_MS - HOUR_MS);
+    await world.seed("scheduler-old", DEN, T0_MS - 2 * HOUR_MS);
+    await addCandidateColo(world.handle(), IAD, T0_MS - HOUR_MS);
+    const cls = scriptedClass([ORD]);
+    cls.where.set("scheduler-moved", IAD);
+    cls.marked.set("scheduler-moved", MIA);
+    cls.where.set("scheduler-old", "SEA" as Colo);
+    const calls: {
+      call: string;
+      deadlineMs: number;
+      untilMs: number;
+      nowMs: number;
+    }[] = [];
+    const leaseUntil = (): number =>
+      (
+        world.creator
+          .query("SELECT claimed_until_ms FROM follow_pass WHERE id = 1")
+          .get() as { claimed_until_ms: number }
+      ).claimed_until_ms;
+    const watched: CreatorClass = {
+      ...cls,
+      place: async (name, colo, deadlineMs) => {
+        calls.push({
+          call: "place",
+          deadlineMs,
+          untilMs: leaseUntil(),
+          nowMs: world.clock,
+        });
+        await cls.place(name, colo, deadlineMs);
+      },
+      markInPlace: async (name, deadlineMs) => {
+        calls.push({
+          call: "mark",
+          deadlineMs,
+          untilMs: leaseUntil(),
+          nowMs: world.clock,
+        });
+        return await cls.markInPlace(name, deadlineMs);
+      },
+      release: async (name, deadlineMs) => {
+        calls.push({
+          call: "release",
+          deadlineMs,
+          untilMs: leaseUntil(),
+          nowMs: world.clock,
+        });
+        await cls.release(name, deadlineMs);
+      },
+    };
+    await world.pass(watched);
+    expect([...new Set(calls.map((c) => c.call))].sort()).toEqual([
+      "mark",
+      "place",
+      "release",
+    ]);
+    for (const c of calls) {
+      expect(c.deadlineMs).toBeGreaterThan(c.nowMs);
+      expect(c.deadlineMs).toBeLessThan(c.untilMs);
+    }
+  });
+
+  // A placement can fail at the caller while its request is still on its way
+  // to the object, and land any time before its deadline. Had the pass given
+  // its lease up early, the next pass could resolve and spend the name first,
+  // and the late placement would then leave a marked object outside every
+  // table. So the lease stays held until it lapses on its own.
+  test("keeps its lease after a call that acts failed, until it lapses", async () => {
+    await world.act();
+    const cls = scriptedClass([ORD]);
+    const timedOut: CreatorClass = {
+      ...cls,
+      place: async () => {
+        throw new Error("placement timed out");
+      },
+    };
+    const report = await world.pass(timedOut, { attemptsPerClassPerPass: 1 });
+    expect(report.failures.length).toBeGreaterThan(0);
+    expect(
+      await claimPass(world.handle(), {
+        holder: "next-pass",
+        nowMs: world.clock,
+        leaseMs: HOUR_MS / 2,
+      }),
+    ).toBe(false);
+    expect(
+      await claimPass(world.handle(), {
+        holder: "next-pass",
+        nowMs: world.clock + HOUR_MS / 2,
+        leaseMs: HOUR_MS / 2,
+      }),
+    ).toBe(true);
+  });
+
+  // The other side of the fence: an object that finds the deadline passed
+  // refuses, and the pass treats the refusal as any failed placement - its
+  // attempt stays open for the pass that holds the lease to resolve, and
+  // nothing is registered.
+  test("a placement refused past its deadline leaves its attempt open", async () => {
+    await world.act();
+    const cls = scriptedClass([ORD]);
+    const late: CreatorClass = {
+      ...cls,
+      place: async (name, colo, deadlineMs) => {
+        world.clock = deadlineMs + 1;
+        if (world.clock > deadlineMs) throw new Error("deadline passed");
+        await cls.place(name, colo, deadlineMs);
+      },
+    };
+    const report = await world.pass(late, { attemptsPerClassPerPass: 1 });
+    expect(report.created).toEqual([]);
+    expect(cls.placed).toEqual([]);
+    expect(await readSlots(world.handle())).toEqual([]);
+    expect(
+      (await readOpenIntents(world.handle(), world.clock + 1)).map(
+        (i) => i.name,
+      ),
+    ).toEqual(["scheduler-test-enam-1"]);
   });
 
   // Observing a slot does not renew the lease, so a pass can lose it between
@@ -242,6 +371,7 @@ describe("the pass lease", () => {
       observe: async (name, hint) => {
         await stampVerified(world.handle(), {
           name,
+          colo: ORD,
           opId: "stale-pass",
           atMs: world.clock,
         });
@@ -261,6 +391,56 @@ describe("the pass lease", () => {
     await world.pass(scriptedClass([]));
     const next = await world.pass(scriptedClass([]));
     expect(next.skipped).toBe(false);
+  });
+});
+
+describe("an app's class", () => {
+  // An app can implement its class as a class instance, with prototype
+  // methods and private state. The pass wraps each class to fence its calls,
+  // and a wrapper that copied own properties would drop the prototype methods
+  // and rebind `this`; every member must reach the app's own object.
+  test("works when it is a class instance with private state", async () => {
+    await world.act();
+    const scripted = scriptedClass([ORD]);
+    class AppClass implements CreatorClass {
+      readonly #inner = scripted;
+      get code() {
+        return this.#inner.code;
+      }
+      get label() {
+        return this.#inner.label;
+      }
+      get releaseAfterMs() {
+        return this.#inner.releaseAfterMs;
+      }
+      get spares() {
+        return this.#inner.spares;
+      }
+      nameOf(number: number, regionHint: string) {
+        return this.#inner.nameOf(number, regionHint);
+      }
+      objectIdOf(name: string) {
+        return this.#inner.objectIdOf(name);
+      }
+      observe(name: string, hint: string | null) {
+        return this.#inner.observe(name, hint);
+      }
+      place(name: string, colo: Colo, deadlineMs: number) {
+        return this.#inner.place(name, colo, deadlineMs);
+      }
+      markInPlace(name: string, deadlineMs: number) {
+        return this.#inner.markInPlace(name, deadlineMs);
+      }
+      release(name: string, deadlineMs: number) {
+        return this.#inner.release(name, deadlineMs);
+      }
+    }
+    const report = await world.pass(new AppClass());
+    expect(report.failures).toEqual([]);
+    expect(report.created.map((o) => o.name)).toEqual([
+      "scheduler-test-enam-1",
+    ]);
+    expect(scripted.placed).toEqual(["scheduler-test-enam-1"]);
   });
 });
 
