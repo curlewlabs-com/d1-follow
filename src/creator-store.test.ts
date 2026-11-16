@@ -207,11 +207,13 @@ describe("the registry", () => {
     });
     await stampVerified(db, {
       name: "slot-01",
+      colo: ORD,
       opId: "b",
       atMs: AT_MS + 1,
     });
     await stampVerified(db, {
       name: "slot-01",
+      colo: ORD,
       opId: "c",
       atMs: AT_MS + 2,
     });
@@ -237,9 +239,51 @@ describe("the registry", () => {
       opId: "a",
       kind: "seeded",
     });
-    await stampVerified(db, { name: "slot-01", opId: "b", atMs: AT_MS + 5 });
-    await stampVerified(db, { name: "slot-01", opId: "c", atMs: AT_MS + 2 });
+    await stampVerified(db, {
+      name: "slot-01",
+      colo: ORD,
+      opId: "b",
+      atMs: AT_MS + 5,
+    });
+    await stampVerified(db, {
+      name: "slot-01",
+      colo: ORD,
+      opId: "c",
+      atMs: AT_MS + 2,
+    });
     expect((await readSlots(db))[0]?.verifiedAtMs).toBe(AT_MS + 5);
+  });
+
+  // A pass that lost its lease can stamp from an answer it got before another
+  // pass moved the slot's row to a new colo. That answer says nothing about the
+  // new colo, so the stamp must match nothing there, record nothing, and say so.
+  test("a stamp from the colo a slot moved out of matches nothing", async () => {
+    const read = slot(LANE_CLASS, MIA, "lane-slot-03");
+    await registerSlot(db, read, { opId: "a", kind: "created" });
+    expect(
+      await moveSlot(db, read, { colo: ORD, atMs: AT_MS + 5, opId: "m" }),
+    ).toBe(true);
+    expect(
+      await stampVerified(db, {
+        name: "lane-slot-03",
+        colo: MIA,
+        opId: "stale",
+        atMs: AT_MS + 6,
+      }),
+    ).toBe(false);
+    expect(await readSlotNamed(db, "lane-slot-03")).toMatchObject({
+      colo: ORD,
+      verifiedAtMs: AT_MS + 5,
+    });
+    expect(ledger().map((row) => row["op_id"])).not.toContain("stale");
+    expect(
+      await stampVerified(db, {
+        name: "lane-slot-03",
+        colo: ORD,
+        opId: "fresh",
+        atMs: AT_MS + 7,
+      }),
+    ).toBe(true);
   });
 
   // A lane hands off to its class's slot in the colo its run points at; a
@@ -314,6 +358,7 @@ describe("the registry", () => {
     await registerSlot(db, read, { opId: "a", kind: "created" });
     await stampVerified(db, {
       name: "lane-slot-03",
+      colo: MIA,
       opId: "b",
       atMs: AT_MS + 5,
     });
@@ -357,6 +402,7 @@ describe("the registry", () => {
     ).rejects.toThrow();
     await stampVerified(db, {
       name: "lane-slot-03",
+      colo: MIA,
       opId: "v",
       atMs: AT_MS + 6,
     });

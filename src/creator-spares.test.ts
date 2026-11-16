@@ -360,6 +360,7 @@ describe("keeping spares beside the primary", () => {
       if (name === "scheduler-old-mia") {
         await stampSpareVerified(world.handle(), {
           name: "scheduler-old-iad",
+          colo: IAD,
           opId: "other-pass",
           atMs: T0_MS + 1,
         });
@@ -394,6 +395,7 @@ describe("keeping spares beside the primary", () => {
       if (name === "scheduler-spare") {
         await stampSpareVerified(world.handle(), {
           name: "scheduler-old-iad",
+          colo: IAD,
           opId: "other-pass",
           atMs: T0_MS + 1,
         });

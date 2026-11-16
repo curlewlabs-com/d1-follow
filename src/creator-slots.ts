@@ -106,7 +106,18 @@ export async function observeSlots(pass: {
     }
     const atMs = pass.now();
     if (colo === slot.colo) {
-      await stampVerified(db, { name: slot.name, opId: pass.newOpId(), atMs });
+      const stamped = await stampVerified(db, {
+        name: slot.name,
+        colo,
+        opId: pass.newOpId(),
+        atMs,
+      });
+      if (!stamped) {
+        pass.log(
+          `[follow] ${cls.label} slot ${slot.name} is no longer registered in ${colo} - left for the next pass`,
+        );
+        continue;
+      }
       registry.set(slot.name, { ...slot, verifiedAtMs: atMs });
       verified.push(slot.name);
       continue;

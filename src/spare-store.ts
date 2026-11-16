@@ -11,6 +11,7 @@ import {
   type Slot,
   type SqlDatabase,
 } from "./creator-store";
+import type { Colo } from "./colo";
 import { holdIdentity, releaseIdentity } from "./slot-identity";
 
 // Every statement this module runs, beside the store's CREATOR_SQL, so the
@@ -22,10 +23,12 @@ export const SPARE_SQL = {
     "SELECT class_code, colo, name, object_id, registered_at_ms, verified_at_ms FROM follow_spare ORDER BY class_code, colo, registered_at_ms, name",
   insertSpare:
     "INSERT INTO follow_spare (class_code, colo, name, object_id, registered_at_ms, verified_at_ms) VALUES (?, ?, ?, ?, ?, ?)",
+  // As the registry's stamp: both match the spare only in the colo its answer
+  // came from.
   recordFirstSpareVerification:
-    "INSERT INTO follow_ledger (op_id, at_ms, kind, class_code, name, object_id, colo) SELECT ?, ?, ?, class_code, name, object_id, colo FROM follow_spare WHERE name = ? AND verified_at_ms IS NULL",
+    "INSERT INTO follow_ledger (op_id, at_ms, kind, class_code, name, object_id, colo) SELECT ?, ?, ?, class_code, name, object_id, colo FROM follow_spare WHERE name = ? AND colo = ? AND verified_at_ms IS NULL",
   stampSpareVerified:
-    "UPDATE follow_spare SET verified_at_ms = max(ifnull(verified_at_ms, 0), ?) WHERE name = ?",
+    "UPDATE follow_spare SET verified_at_ms = max(ifnull(verified_at_ms, 0), ?) WHERE name = ? AND colo = ? RETURNING name",
   // As the registry's unregister: each statement matches the spare only while
   // its verification is the one the pass decided on.
   recordSpareUnregistered:
@@ -87,21 +90,32 @@ export async function registerSpare(
 
 // A spare's latest verification (creator-spares.ts decides what verifies one),
 // recorded as stampVerified records a base slot's: only the first stamp writes
-// a ledger row.
+// a ledger row, it matches only in the colo the answer came from, and it is
+// true when the spare was still there.
 export async function stampSpareVerified(
   db: SqlDatabase,
   stamp: {
     readonly name: string;
+    readonly colo: Colo;
     readonly opId: string;
     readonly atMs: number;
   },
-): Promise<void> {
-  await db.batch([
+): Promise<boolean> {
+  const results = await db.batch([
     db
       .prepare(SPARE_SQL.recordFirstSpareVerification)
-      .bind(stamp.opId, stamp.atMs, LEDGER_KIND.verified, stamp.name),
-    db.prepare(SPARE_SQL.stampSpareVerified).bind(stamp.atMs, stamp.name),
+      .bind(
+        stamp.opId,
+        stamp.atMs,
+        LEDGER_KIND.verified,
+        stamp.name,
+        stamp.colo,
+      ),
+    db
+      .prepare(SPARE_SQL.stampSpareVerified)
+      .bind(stamp.atMs, stamp.name, stamp.colo),
   ]);
+  return returnedRows(results[1], "spare stamp's update").length > 0;
 }
 
 // Takes a spare out of the spare table into the release queue, as

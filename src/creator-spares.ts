@@ -96,11 +96,18 @@ export async function observeSpares(pass: {
       seen.colo === spare.colo &&
       seen.markedColo === spare.colo
     ) {
-      await stampSpareVerified(db, {
+      const stamped = await stampSpareVerified(db, {
         name: spare.name,
+        colo: spare.colo,
         opId: pass.newOpId(),
         atMs,
       });
+      if (!stamped) {
+        pass.log(
+          `[follow] ${cls.label} spare ${spare.name} is no longer registered in ${spare.colo} - left for the next pass`,
+        );
+        continue;
+      }
       verified.push(spare.name);
       kept.push({ ...spare, verifiedAtMs: atMs });
       continue;
@@ -124,11 +131,18 @@ export async function observeSpares(pass: {
       (await remark(cls, spare))
     ) {
       const markedAtMs = pass.now();
-      await stampSpareVerified(db, {
+      const stamped = await stampSpareVerified(db, {
         name: spare.name,
+        colo: spare.colo,
         opId: pass.newOpId(),
         atMs: markedAtMs,
       });
+      if (!stamped) {
+        pass.log(
+          `[follow] ${cls.label} spare ${spare.name} is no longer registered in ${spare.colo} - left for the next pass`,
+        );
+        continue;
+      }
       verified.push(spare.name);
       remarked.push(spare.name);
       kept.push({ ...spare, verifiedAtMs: markedAtMs });

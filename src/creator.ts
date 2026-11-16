@@ -467,14 +467,15 @@ async function runLeasedPass(
       // leave the class short in this pass's count, or the next creation would
       // register a spare beyond the count.
       occupied.set(cls.code, (occupied.get(cls.code) ?? 0) + 1);
-      await stampSpareVerified(db, { name, opId, atMs });
-      ready.set(cls.code, (ready.get(cls.code) ?? 0) + 1);
+      if (await stampSpareVerified(db, { name, colo, opId, atMs })) {
+        ready.set(cls.code, (ready.get(cls.code) ?? 0) + 1);
+      }
       report.sparesCreated.push({ classCode: cls.code, name, colo });
       log(`[follow] ${cls.label} spare ${name} created in ${colo}`);
       return;
     }
-    await stampVerified(db, { name, opId, atMs });
-    registry.set(name, { ...slot, verifiedAtMs: atMs });
+    const stamped = await stampVerified(db, { name, colo, opId, atMs });
+    registry.set(name, { ...slot, verifiedAtMs: stamped ? atMs : null });
     held.set(cls.code, (held.get(cls.code) ?? new Set<Colo>()).add(colo));
     report.created.push({ classCode: cls.code, name, colo });
     log(`[follow] ${cls.label} slot ${name} created in ${colo}`);

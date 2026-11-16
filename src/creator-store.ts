@@ -63,12 +63,14 @@ export const CREATOR_SQL = {
     "INSERT INTO follow_name_counter (class_code, last_number) VALUES (?, 1) ON CONFLICT (class_code) DO UPDATE SET last_number = last_number + 1 RETURNING last_number",
   insertSlot:
     "INSERT INTO follow_slot (class_code, colo, name, object_id, registered_at_ms, verified_at_ms) VALUES (?, ?, ?, ?, ?, ?)",
+  // Both stamp statements match the slot only in the colo its answer came from
+  // (stampVerified says why).
   recordFirstVerification:
-    "INSERT INTO follow_ledger (op_id, at_ms, kind, class_code, name, object_id, colo) SELECT ?, ?, ?, class_code, name, object_id, colo FROM follow_slot WHERE name = ? AND verified_at_ms IS NULL",
+    "INSERT INTO follow_ledger (op_id, at_ms, kind, class_code, name, object_id, colo) SELECT ?, ?, ?, class_code, name, object_id, colo FROM follow_slot WHERE name = ? AND colo = ? AND verified_at_ms IS NULL",
   // Never moves the time back (stampVerified says why); a slot not yet
   // verified takes the stamp as it is.
   stampVerified:
-    "UPDATE follow_slot SET verified_at_ms = max(ifnull(verified_at_ms, 0), ?) WHERE name = ?",
+    "UPDATE follow_slot SET verified_at_ms = max(ifnull(verified_at_ms, 0), ?) WHERE name = ? AND colo = ? RETURNING name",
   // Each of an unregister's statements matches the slot only while its
   // verification is the one the pass decided on (unregisterSlot says why), and
   // the ledger row and the release-queue row are copied from the slot ahead of
@@ -361,27 +363,40 @@ export async function registerSlot(
   ]);
 }
 
-// Stamps a slot's latest answer from its own colo. Only the first stamp is a
-// verification change, so only it writes a ledger row, in the same batch;
-// later stamps refresh the time, and never move it back, since a pass stamps
-// without holding its lease and a stale one can land after a newer answer. A
-// slot that stops answering from its colo leaves the registry through
-// unregisterSlot, which records that change.
+// Stamps a slot's latest answer from `colo`, its own, and true when the slot
+// was still registered there. Only the first stamp is a verification change,
+// so only it writes a ledger row, in the same batch; later stamps refresh the
+// time, and never move it back, since a pass stamps without holding its lease
+// and a stale one can land after a newer answer. The colo binds the stamp to
+// the row the answer was about: a pass that lost its lease can stamp after
+// another pass moved the slot's row to a new colo, and an answer from the old
+// colo says nothing about the new one. A slot that stops answering from its
+// colo leaves the registry through unregisterSlot, which records that change.
 export async function stampVerified(
   db: SqlDatabase,
   stamp: {
     readonly name: string;
+    readonly colo: Colo;
     readonly opId: string;
     readonly atMs: number;
   },
-): Promise<void> {
-  await db.batch([
+): Promise<boolean> {
+  const results = await db.batch([
     // Ahead of the update, which is what makes "first" observable.
     db
       .prepare(CREATOR_SQL.recordFirstVerification)
-      .bind(stamp.opId, stamp.atMs, LEDGER_KIND.verified, stamp.name),
-    db.prepare(CREATOR_SQL.stampVerified).bind(stamp.atMs, stamp.name),
+      .bind(
+        stamp.opId,
+        stamp.atMs,
+        LEDGER_KIND.verified,
+        stamp.name,
+        stamp.colo,
+      ),
+    db
+      .prepare(CREATOR_SQL.stampVerified)
+      .bind(stamp.atMs, stamp.name, stamp.colo),
   ]);
+  return returnedRows(results[1], "stamp's update").length > 0;
 }
 
 // Takes a slot out of the registry with the ledger row that says why, in one

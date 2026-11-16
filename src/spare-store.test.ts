@@ -169,6 +169,7 @@ describe("the spares", () => {
     });
     await stampSpareVerified(db, {
       name: "spare-01",
+      colo: ORD,
       opId: "v",
       atMs: AT_MS + 10,
     });
@@ -232,7 +233,12 @@ describe("the spares", () => {
     expect(await registeredClassOf(db, "spare-01")).toBe(STATELESS_CLASS);
     expect(await registeredClassOf(db, "spare-03")).toBeNull();
 
-    await stampSpareVerified(db, { name: "spare-01", opId: "v", atMs: AT_MS });
+    await stampSpareVerified(db, {
+      name: "spare-01",
+      colo: ORD,
+      opId: "v",
+      atMs: AT_MS,
+    });
     await promoteSpare(db, "spare-01", { opId: "p", atMs: AT_MS + 1 });
     expect(await registeredClassOf(db, "spare-01")).toBe(STATELESS_CLASS);
 
@@ -270,7 +276,12 @@ describe("the spares", () => {
       opId: "b",
       kind: "created",
     });
-    await stampVerified(db, { name: "slot-01", opId: "v", atMs: AT_MS + 10 });
+    await stampVerified(db, {
+      name: "slot-01",
+      colo: MIA,
+      opId: "v",
+      atMs: AT_MS + 10,
+    });
     expect(
       await unregisterSlot(db, read, {
         opId: "u",
@@ -328,6 +339,25 @@ describe("the spares", () => {
     );
   });
 
+  // As for a base slot: a stamp carrying a colo the spare is not registered in
+  // is an answer about another row, so it matches and records nothing.
+  test("a spare stamp from another colo matches nothing", async () => {
+    await registerSpare(db, slot(STATELESS_CLASS, ORD, "spare-01"), {
+      opId: "a",
+      kind: "created",
+    });
+    expect(
+      await stampSpareVerified(db, {
+        name: "spare-01",
+        colo: MIA,
+        opId: "stale",
+        atMs: AT_MS + 10,
+      }),
+    ).toBe(false);
+    expect((await readSpares(db))[0]?.verifiedAtMs).toBeNull();
+    expect(ledger().map((row) => row["op_id"])).toEqual(["a"]);
+  });
+
   test("only a spare's first verification stamp is recorded", async () => {
     await registerSpare(db, slot(STATELESS_CLASS, ORD, "spare-01"), {
       opId: "a",
@@ -335,11 +365,13 @@ describe("the spares", () => {
     });
     await stampSpareVerified(db, {
       name: "spare-01",
+      colo: ORD,
       opId: "v1",
       atMs: AT_MS + 10,
     });
     await stampSpareVerified(db, {
       name: "spare-01",
+      colo: ORD,
       opId: "v2",
       atMs: AT_MS + 20,
     });
@@ -386,6 +418,7 @@ describe("the spares", () => {
     });
     await stampSpareVerified(db, {
       name: "spare-01",
+      colo: ORD,
       opId: "v",
       atMs: AT_MS + 10,
     });
@@ -419,6 +452,7 @@ describe("the spares", () => {
     });
     await stampSpareVerified(db, {
       name: "spare-01",
+      colo: ORD,
       opId: "v",
       atMs: AT_MS + 10,
     });

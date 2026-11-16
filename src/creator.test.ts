@@ -242,6 +242,7 @@ describe("the pass lease", () => {
       observe: async (name, hint) => {
         await stampVerified(world.handle(), {
           name,
+          colo: ORD,
           opId: "stale-pass",
           atMs: world.clock,
         });
