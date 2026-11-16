@@ -338,6 +338,66 @@ describe("attempts", () => {
     expect(cls.releasedNames).toEqual(["scheduler-test-enam-1"]);
   });
 
+  // Both cleanups empty an object the creator minted and never registered,
+  // and an app may still protect such a name. The keep list that guards the
+  // release step guards them too: a protected name is never emptied, and its
+  // attempt stays open rather than being recorded as spent.
+  test("empties no protected name when the registry refuses it", async () => {
+    await world.act();
+    const cls = scriptedClass([ORD]);
+    const racing: CreatorClass = {
+      ...cls,
+      place: async (name, colo) => {
+        await cls.place(name, colo);
+        await world.seed("scheduler-racer", colo, T0_MS);
+      },
+    };
+    const report = await world.pass(racing, {
+      attemptsPerClassPerPass: 1,
+      protectedNames: new Set(["scheduler-test-enam-1"]),
+    });
+    expect(cls.releasedNames).toEqual([]);
+    expect(
+      (await readOpenIntents(world.handle(), world.clock + 1)).map(
+        (i) => i.name,
+      ),
+    ).toEqual(["scheduler-test-enam-1"]);
+    expect(report.created).toEqual([]);
+  });
+
+  test("leaves a resolved attempt open when its name holds a lane", async () => {
+    await world.act();
+    const cls = scriptedClass([ORD, ORD]);
+    const lost: CreatorClass = {
+      ...cls,
+      observe: async (name, hint) => {
+        await cls.observe(name, hint);
+        if (hint !== null) throw new Error("answer lost");
+        return { colo: cls.where.get(name) ?? null, markedColo: null };
+      },
+    };
+    await world.seed("scheduler-serving", ORD, T0_MS);
+    cls.where.set("scheduler-serving", ORD);
+    await world.pass(lost, { attemptsPerClassPerPass: 1 });
+    world.app
+      .query(
+        "INSERT INTO follow_lane (lane, holder, seq, changed_at_ms, changed_by) VALUES (1, 'scheduler-test-enam-1', 1, 0, 3)",
+      )
+      .run();
+
+    world.clock += HOUR_MS;
+    const resolved = await world.pass(cls, { attemptsPerClassPerPass: 1 });
+    expect(cls.releasedNames).toEqual([]);
+    expect(resolved.spent.map((o) => o.name)).not.toContain(
+      "scheduler-test-enam-1",
+    );
+    expect(
+      (await readOpenIntents(world.handle(), world.clock + 1)).map(
+        (i) => i.name,
+      ),
+    ).toEqual(["scheduler-test-enam-1"]);
+  });
+
   // Through an outage every attempt's answer is lost. Resolutions share the
   // pass's budget with attempts at the primary's gap, so the calls stay at one
   // pass's budget, and a class with attempts still open starts no new ones,

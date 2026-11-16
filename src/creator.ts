@@ -312,6 +312,31 @@ async function runLeasedPass(
     report,
   });
   const classOf = new Map(config.classes.map((c) => [c.code, c]));
+  // The names no release may empty: the app's protected names and each lane's
+  // holder. Read once a pass, when the first release needs it, and shared by
+  // every path that empties an object, so a cleanup obeys the same list as the
+  // release step. A read that fails refuses the cleanups that asked and fails
+  // the release step as it always has.
+  let keepRead: Promise<ReadonlySet<string>> | null = null;
+  const keepNames = (): Promise<ReadonlySet<string>> =>
+    (keepRead ??= readLaneHolders(deps.appDb).then(
+      (holders) => new Set([...config.protectedNames, ...holders]),
+    ));
+  // Whether a cleanup may empty `name`, logging why not when it may not.
+  const mayEmpty = async (name: string): Promise<boolean> => {
+    let keep: ReadonlySet<string>;
+    try {
+      keep = await keepNames();
+    } catch (error) {
+      fail(`read the names to keep before emptying ${name}: ${message(error)}`);
+      return false;
+    }
+    if (keep.has(name)) {
+      log(`[follow] ${name} is protected or holds a lane - not emptied`);
+      return false;
+    }
+    return true;
+  };
   // A class that gained or lost a slot this pass starts its backoff over.
   const changed = new Set<number>();
 
@@ -450,15 +475,17 @@ async function runLeasedPass(
       });
     } catch (error) {
       // Placed but not registered: a marked object outside the registry would
-      // never cease and never be released, so it is emptied. Its intent stays
-      // open for a later pass.
-      await call(() =>
-        cls.release(name).catch((releaseError: unknown) => {
-          log(
-            `[follow] failed - empty unregistered ${name}: ${message(releaseError)}`,
-          );
-        }),
-      );
+      // never cease and never be released, so it is emptied, unless the keep
+      // list names it. Its intent stays open for a later pass either way.
+      if (await mayEmpty(name)) {
+        await call(() =>
+          cls.release(name).catch((releaseError: unknown) => {
+            log(
+              `[follow] failed - empty unregistered ${name}: ${message(releaseError)}`,
+            );
+          }),
+        );
+      }
       throw error;
     }
     changed.add(cls.code);
@@ -547,11 +574,15 @@ async function runLeasedPass(
       const role = roleOf(cls, colo);
       if (colo !== null && role !== null) {
         await keep(cls, intent.name, colo, intent.opId, role);
-      } else {
+      } else if (await mayEmpty(intent.name)) {
         // An interrupted pass may have placed it before its answer was lost;
         // emptying an object that holds nothing is harmless.
         await call(() => cls.release(intent.name));
         await spend(cls, intent.name, colo, intent.opId);
+      } else {
+        // Refused: the attempt stays open, and the class makes no new ones
+        // until it resolves, as for any attempt this pass cannot resolve.
+        unresolved.add(cls.code);
       }
     } catch (error) {
       if (error instanceof LeaseLost) throw error;
@@ -655,15 +686,12 @@ async function runLeasedPass(
   // Release what has been out of the registry long enough and holds no lane.
   // Each class reads only its due releases, at most the attempts bound, so a
   // backlog costs a pass no more reads, calls or ledger rows than that.
-  const keepNames = [
-    ...config.protectedNames,
-    ...(await readLaneHolders(deps.appDb)),
-  ];
+  const keepList = [...(await keepNames())];
   for (const cls of config.classes) {
     const due = await readReleaseDue(db, {
       classCode: cls.code,
       unregisteredByMs: passStartMs - cls.releaseAfterMs,
-      keep: keepNames,
+      keep: keepList,
       limit: config.attemptsPerClassPerPass,
     });
     for (const pending of due) {
