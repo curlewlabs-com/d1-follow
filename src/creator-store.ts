@@ -259,7 +259,10 @@ export function ledgerStatement(
 // run, and its number stays taken: a number is taken once whatever then happens
 // to the name, so a name is never reused. `nameOf` must give names no other
 // class's gives, since a name keys the registry and the open intents across
-// classes.
+// classes. The intent records the name's object id too, from `objectIdOf`,
+// because the census finds the ledger's account of an object by its id: an
+// object an interrupted creation left holding data is then reported as that
+// unresolved attempt, not as one nothing accounts for.
 export async function beginCreation(
   db: SqlDatabase,
   attempt: {
@@ -267,6 +270,7 @@ export async function beginCreation(
     readonly opId: string;
     readonly atMs: number;
     readonly nameOf: (number: number) => string;
+    readonly objectIdOf: (name: string) => string;
   },
 ): Promise<{ readonly number: number; readonly name: string }> {
   const { results } = await db
@@ -290,6 +294,7 @@ export async function beginCreation(
       kind: "creation_intent",
       classCode: attempt.classCode,
       name,
+      objectId: attempt.objectIdOf(name),
     }),
     db
       .prepare(CREATOR_SQL.openIntent)

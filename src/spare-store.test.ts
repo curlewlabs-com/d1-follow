@@ -29,6 +29,8 @@ import { registeredClassOf, SLOT_IDENTITY_SQL } from "./slot-identity";
 const ORD = "ORD" as Colo;
 const MIA = "MIA" as Colo;
 const AT_MS = Date.UTC(2026, 9, 5, 23, 0, 0);
+// The id a test's namespace computes from a name, as the slot helper's.
+const idOf = (name: string): string => `id-${name}`;
 const STATELESS_CLASS = 1;
 
 let schema: string;
@@ -329,6 +331,7 @@ describe("the spares", () => {
       opId: "a",
       atMs: AT_MS,
       nameOf: (number) => `spare-${number}`,
+      objectIdOf: idOf,
     });
     await registerSpare(db, slot(STATELESS_CLASS, ORD, "spare-1"), {
       opId: "a",

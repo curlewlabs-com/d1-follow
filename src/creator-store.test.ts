@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { Colo } from "./colo";
 import { CREATOR_APP_SQL } from "./app-lane-reads";
+import { takeCensus } from "./census";
 import { sqliteHandle } from "./sqlite-test-handle";
 import { CANDIDATE_SQL } from "./candidate-store";
 import {
@@ -42,6 +43,8 @@ const ORD = "ORD" as Colo;
 const MIA = "MIA" as Colo;
 const IAD = "IAD" as Colo;
 const AT_MS = Date.UTC(2026, 9, 5, 23, 0, 0);
+// The id a test's namespace computes from a name, as the slot helper's.
+const idOf = (name: string): string => `id-${name}`;
 const STATELESS_CLASS = 1;
 const LANE_CLASS = 2;
 
@@ -105,6 +108,7 @@ test("the schema applies again over itself, keeping every row", async () => {
     opId: "before",
     atMs: AT_MS,
     nameOf: (n) => `slot-${n}`,
+    objectIdOf: idOf,
   });
   sqlite.exec(
     await Bun.file(new URL("../schema/creator.sql", import.meta.url)).text(),
@@ -116,6 +120,7 @@ test("the schema applies again over itself, keeping every row", async () => {
       opId: "after",
       atMs: AT_MS,
       nameOf: (n) => `slot-${n}`,
+      objectIdOf: idOf,
     }),
   ).toEqual({ number: taken.number + 1, name: `slot-${taken.number + 1}` });
 });
@@ -131,7 +136,14 @@ describe("beginCreation", () => {
       classCode: number,
       opId: string,
       named: (number: number) => string,
-    ) => beginCreation(db, { classCode, opId, atMs: AT_MS, nameOf: named });
+    ) =>
+      beginCreation(db, {
+        classCode,
+        opId,
+        atMs: AT_MS,
+        nameOf: named,
+        objectIdOf: idOf,
+      });
     expect(await take(STATELESS_CLASS, "a", nameOf)).toEqual({
       number: 1,
       name: "slot-01",
@@ -149,15 +161,25 @@ describe("beginCreation", () => {
   // Intent before act: the exact name is on record before anything addresses
   // it, so an answer lost on the way back can be resolved by observing that
   // name.
-  test("records the attempt's intent under the exact name it hands back", async () => {
+  // The intent carries the name's object id, which is what the census finds
+  // the ledger's account of an object by: without it, an object an interrupted
+  // creation left holding data reads as one nothing accounts for.
+  test("records the attempt's intent under the exact name it hands back, with its id", async () => {
     const { name } = await beginCreation(db, {
       classCode: STATELESS_CLASS,
       opId: "a",
       atMs: AT_MS,
       nameOf,
+      objectIdOf: idOf,
     });
     expect(ledger()).toEqual([
-      ledgerRow({ op_id: "a", kind: 1, class_code: STATELESS_CLASS, name }),
+      ledgerRow({
+        op_id: "a",
+        kind: 1,
+        class_code: STATELESS_CLASS,
+        name,
+        object_id: idOf(name),
+      }),
     ]);
   });
 });
@@ -583,6 +605,7 @@ describe("open intents", () => {
       opId,
       atMs,
       nameOf,
+      objectIdOf: idOf,
     });
 
   // A pass that loses an attempt's answer must still find it, without reading
@@ -695,6 +718,33 @@ describe("the ledger by object", () => {
     const kinds = await readLedgerKinds(db, ["id-slot-01", "id-unknown"]);
     expect(kinds).toEqual(new Map([["id-slot-01", "unregistered"]]));
   });
+  // An attempt interrupted after its object took data leaves only the intent.
+  // The census must find that intent through the object's id and report the
+  // object as unresolved; reported as unnamed, it would send an operator after
+  // a foreign object when it is the creator's own unfinished attempt.
+  test("an interrupted creation's object reaches the census as unresolved", async () => {
+    const { name } = await beginCreation(db, {
+      classCode: STATELESS_CLASS,
+      opId: "a",
+      atMs: AT_MS,
+      nameOf: (n) => `slot-${n}`,
+      objectIdOf: idOf,
+    });
+    const report = takeCensus({
+      objects: [{ classLabel: "Handler", id: idOf(name), hasStoredData: true }],
+      slots: [],
+      spares: [],
+      pending: [],
+      ledgerKinds: await readLedgerKinds(db, [idOf(name)]),
+      names: new Map(),
+      recognized: () => false,
+    });
+    expect(report.unresolved).toEqual([
+      { classLabel: "Handler", id: idOf(name), name: null },
+    ]);
+    expect(report.unnamed).toEqual([]);
+  });
+
   // A release that keeps failing appends an intent on every retry, for the
   // life of the environment. The read returns one row per object however long
   // that history grows, so a census costs what it asks about, not what was

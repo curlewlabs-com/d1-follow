@@ -599,6 +599,7 @@ async function runLeasedPass(
         opId,
         atMs: deps.now(),
         nameOf: (n) => cls.nameOf(n, regionHint),
+        objectIdOf: cls.objectIdOf,
       });
       try {
         const { colo } = await call(() => cls.observe(name, regionHint));
