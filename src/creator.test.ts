@@ -261,6 +261,38 @@ describe("the pass lease", () => {
     }
   });
 
+  // A placement can fail at the caller while its request is still on its way
+  // to the object, and land any time before its deadline. Had the pass given
+  // its lease up early, the next pass could resolve and spend the name first,
+  // and the late placement would then leave a marked object outside every
+  // table. So the lease stays held until it lapses on its own.
+  test("keeps its lease after a call that acts failed, until it lapses", async () => {
+    await world.act();
+    const cls = scriptedClass([ORD]);
+    const timedOut: CreatorClass = {
+      ...cls,
+      place: async () => {
+        throw new Error("placement timed out");
+      },
+    };
+    const report = await world.pass(timedOut, { attemptsPerClassPerPass: 1 });
+    expect(report.failures.length).toBeGreaterThan(0);
+    expect(
+      await claimPass(world.handle(), {
+        holder: "next-pass",
+        nowMs: world.clock,
+        leaseMs: HOUR_MS / 2,
+      }),
+    ).toBe(false);
+    expect(
+      await claimPass(world.handle(), {
+        holder: "next-pass",
+        nowMs: world.clock + HOUR_MS / 2,
+        leaseMs: HOUR_MS / 2,
+      }),
+    ).toBe(true);
+  });
+
   // The other side of the fence: an object that finds the deadline passed
   // refuses, and the pass treats the refusal as any failed placement - its
   // attempt stays open for the pass that holds the lease to resolve, and

@@ -746,10 +746,11 @@ describe("the ledger by object", () => {
   });
 
   // A release that keeps failing appends an intent on every retry, for the
-  // life of the environment. The read returns one row per object however long
-  // that history grows, so a census costs what it asks about, not what was
-  // retried.
-  test("returns one row per object however many rows the object has", async () => {
+  // life of the environment. The read must cost one indexed seek per object it
+  // asks about, not a walk of each object's history: the plan has to search
+  // the object index from a per-object subquery, with no grouping or sort (a
+  // grouped max(id) returns one row too, but reads every row behind it).
+  test("seeks each object's latest row instead of reading its history", async () => {
     const out = slot(STATELESS_CLASS, ORD, "slot-01");
     await registerSlot(db, out, { opId: "a", kind: "created" });
     await unregisterSlot(db, out, { opId: "b", atMs: AT_MS, detail: "moved" });
@@ -767,6 +768,16 @@ describe("the ledger by object", () => {
       .query(CREATOR_SQL.readLedgerByObjects)
       .all(JSON.stringify(["id-slot-01"]));
     expect(rows).toEqual([{ object_id: "id-slot-01", kind: 6 }]);
+    const plan = (
+      sqlite
+        .query(`EXPLAIN QUERY PLAN ${CREATOR_SQL.readLedgerByObjects}`)
+        .all() as { detail: string }[]
+    ).map((step) => step.detail);
+    expect(plan).toContain("CORRELATED SCALAR SUBQUERY 1");
+    expect(plan).toContain(
+      "SEARCH follow_ledger USING INDEX follow_ledger_by_object (object_id=?)",
+    );
+    expect(plan.filter((d) => /TEMP B-TREE|GROUP BY/.test(d))).toEqual([]);
   });
 });
 

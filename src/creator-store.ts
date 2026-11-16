@@ -53,13 +53,15 @@ export type LaneChangedBy = keyof typeof LANE_CHANGED_BY;
 export const CREATOR_SQL = {
   readSlots:
     "SELECT class_code, colo, name, object_id, registered_at_ms, verified_at_ms FROM follow_slot ORDER BY class_code, colo",
-  // The latest row per requested object, picked in SQL through the object
-  // index, so an object whose release keeps failing costs a census one row
-  // however many intents its retries appended. Unordered: an ORDER BY could
-  // lead the planner to walk the ledger in rowid order instead of searching
-  // its object index.
+  // The latest row per requested object, one indexed seek each: the object
+  // index orders an object's rows by id, so `ORDER BY id DESC LIMIT 1` reads
+  // one entry, however many intents an object's failing releases appended. A
+  // grouped max(id) would return one row too, but SQLite drops its min/max
+  // shortcut under GROUP BY and reads the whole history. An object the ledger
+  // never names comes back with a null kind, which readLedgerKinds leaves out;
+  // filtering it here would run the seek a second time.
   readLedgerByObjects:
-    "SELECT object_id, kind FROM follow_ledger WHERE id IN (SELECT max(id) FROM follow_ledger WHERE object_id IN (SELECT value FROM json_each(?)) GROUP BY object_id)",
+    "SELECT requested.value AS object_id, (SELECT kind FROM follow_ledger WHERE follow_ledger.object_id = requested.value ORDER BY follow_ledger.id DESC LIMIT 1) AS kind FROM json_each(?) AS requested",
   appendLedger:
     "INSERT INTO follow_ledger (op_id, at_ms, kind, class_code, name, object_id, colo, lane_code, lane_seq, from_name, changed_by, mode, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   takeNameNumber:
@@ -215,6 +217,7 @@ export async function readLedgerKinds(
     .all();
   const latest = new Map<string, LedgerKind>();
   for (const row of results) {
+    if ((row as Record<string, unknown>)["kind"] === null) continue;
     const code = integerField(row, "kind");
     const kind = (Object.keys(LEDGER_KIND) as LedgerKind[]).find(
       (k) => LEDGER_KIND[k] === code,

@@ -253,14 +253,47 @@ export async function runCreatorPass(
   // A tenth of the lease before it lapses, which leaves room for the creator's
   // clock and an object's to disagree.
   const deadline = (): number => leaseUntilMs - leaseMs / 10;
+  // A call that acts and fails here may still be in flight, and may land at
+  // the object any time before its deadline. Giving the lease up early would
+  // let the next pass resolve the same name first, and the late call would
+  // then undo that pass's work. So a pass with such a call keeps the lease
+  // until it lapses on its own, which is after every deadline it issued.
+  let unsettled = false;
+  const fenced = deps.config.classes.map((cls): CreatorClass => ({
+    ...cls,
+    place: (name, colo, deadlineMs) =>
+      settled(cls.place(name, colo, deadlineMs)),
+    markInPlace: (name, deadlineMs) =>
+      settled(cls.markInPlace(name, deadlineMs)),
+    release: (name, deadlineMs) => settled(cls.release(name, deadlineMs)),
+  }));
+  const settled = async <T>(call: Promise<T>): Promise<T> => {
+    try {
+      return await call;
+    } catch (error) {
+      unsettled = true;
+      throw error;
+    }
+  };
   try {
-    await runLeasedPass(deps, report, hold, deadline);
+    await runLeasedPass(
+      { ...deps, config: { ...deps.config, classes: fenced } },
+      report,
+      hold,
+      deadline,
+    );
   } catch (error) {
     if (!(error instanceof LeaseLost)) throw error;
     report.leaseLost = true;
     deps.log("[follow] creator pass stopped - another pass took its lease");
   } finally {
-    await releaseLease(deps, holder);
+    if (unsettled) {
+      deps.log(
+        "[follow] creator pass keeps its lease until it lapses - a call that failed may still land",
+      );
+    } else {
+      await releaseLease(deps, holder);
+    }
   }
   return report;
 }
