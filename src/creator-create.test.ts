@@ -294,8 +294,8 @@ describe("attempts", () => {
     const cls = scriptedClass([ORD]);
     const racing: CreatorClass = {
       ...cls,
-      place: async (name, colo) => {
-        await cls.place(name, colo);
+      place: async (name, colo, deadlineMs) => {
+        await cls.place(name, colo, deadlineMs);
         await world.seed("scheduler-racer", colo, T0_MS);
       },
     };
@@ -347,8 +347,8 @@ describe("attempts", () => {
     const cls = scriptedClass([ORD]);
     const racing: CreatorClass = {
       ...cls,
-      place: async (name, colo) => {
-        await cls.place(name, colo);
+      place: async (name, colo, deadlineMs) => {
+        await cls.place(name, colo, deadlineMs);
         await world.seed("scheduler-racer", colo, T0_MS);
       },
     };

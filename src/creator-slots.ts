@@ -36,6 +36,8 @@ export async function observeSlots(pass: {
   readonly newOpId: () => string;
   // Renews the lease, throwing when another pass has taken it.
   readonly hold: () => Promise<void>;
+  // The deadline a call that acts carries (CreatorClass.place).
+  readonly deadline: () => number;
   readonly fail: (line: string) => void;
   readonly log: (line: string) => void;
 }): Promise<{
@@ -69,7 +71,7 @@ export async function observeSlots(pass: {
     await pass.hold();
     let answer: ObserveResult | null = null;
     try {
-      answer = await cls.markInPlace(slot.name);
+      answer = await cls.markInPlace(slot.name, pass.deadline());
     } catch (error) {
       pass.fail(`mark ${slot.name} in place: ${message(error)}`);
     }

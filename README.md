@@ -69,7 +69,7 @@ ships TypeScript source, so it needs a bundler or test runner that compiles
 TypeScript, as Wrangler and `@cloudflare/vitest-plugin` do:
 
 ```sh
-bun add https://github.com/curlewlabs-com/d1-follow/releases/download/v0.1.0/d1-follow-0.1.0.tgz
+bun add https://github.com/curlewlabs-com/d1-follow/releases/download/v0.2.0/d1-follow-0.2.0.tgz
 ```
 
 The lockfile records the tarball's integrity, and each release is immutable.
@@ -149,6 +149,14 @@ hint to start from, and the bounds that size the pass's cost. Everything starts
 in dry-run, which logs what it would do; switch a class to act with `setMode`
 once its log looks right.
 
+The place, mark-in-place and release calls each receive a `deadlineMs`, and each
+must refuse once the object's own clock reads past it, before it touches
+storage. The deadline ends inside the creator's pass lease. A call that arrives
+later belongs to a pass that may no longer hold the lease, and acting on it
+could undo the work of the pass that does. A release call should also refuse
+your serving objects, a lane's current holder and any registered slot or spare
+(`registeredClassOf`), each read when the call arrives.
+
 The design below says what each of those calls must do. The test that a feature
 belongs in this package is whether it stays useful with your app swapped for
 another.
@@ -174,56 +182,6 @@ Still design:
   a standby's name.
 
 The rest of this README is the design, built parts and unbuilt alike.
-
-## Known issues
-
-Each is a narrow case in code that runs in production today, recorded here
-rather than changed in the first release.
-
-- **The creator's two cleanup releases skip the keep list.** A placed object
-  whose registration failed, and an attempt resolved to a colo the class does
-  not keep, are emptied without consulting `protectedNames` or the lane holders,
-  which the ordinary release path does. Both reach only names the creator minted
-  and never registered, and registering a name closes its attempt in the same
-  batch, so a lane holder or a registered slot is never one of them. An app is
-  safe as long as no protected name is one its classes' `nameOf` could still
-  mint ([#3](https://github.com/curlewlabs-com/d1-follow/issues/3)).
-- **A delayed stamp can refresh a moved row.** The verification stamp matches a
-  slot by name only. A pass that lost its lease while observing can stamp a row
-  another pass has just moved to a new colo, extending that row's verification
-  by the delay. A forward or handoff toward it costs what a dead slot costs
-  ([Stateless objects](#stateless-objects-route-forward-once-hint)) until the
-  next pass corrects the row; the lane record still names one holder
-  ([#2](https://github.com/curlewlabs-com/d1-follow/issues/2)).
-- **Object calls are not fenced against a lapsed lease.** The creator checks its
-  pass lease after each call into an object, so a `place`, `markInPlace` or
-  `release` that takes effect after its pass's lease lapsed, and another pass
-  took over, can undo the newer pass's work:
-  - A late placement or mark leaves an object holding only its marker outside
-    every table. The census reports it as released but still holding data.
-  - A late release empties whatever the app's release call lets it reach. The
-    app's release call is expected to refuse, before it touches storage, its
-    serving object, a lane's current holder, and any registered slot or spare,
-    each read at the time of the call (`registeredClassOf` reads the registry
-    and spares for this). With those refusals, a late release cannot reach any
-    of them. What it can still reach is a slot placed but not yet registered:
-    the newer pass then registers a slot without its marker, which ceases once
-    idle; a later pass finds it answering from another colo, or not at all, and
-    moves it or takes it out of the registry and fills its place. Forwards
-    toward it cost what a dead slot costs meanwhile.
-  - A lane's record keeps one holder throughout.
-
-  How the object side should refuse a stale call is undecided
-  ([#1](https://github.com/curlewlabs-com/d1-follow/issues/1)).
-
-- **The census reads every ledger row for each object it checks.** It keeps only
-  the latest, so an object whose release keeps failing adds a row per retry to
-  every later census read
-  ([#4](https://github.com/curlewlabs-com/d1-follow/issues/4)).
-- **A creation intent does not record its object id.** The census matches the
-  ledger by object id, so an object left holding data by an interrupted creation
-  is reported as unaccounted for, not as unresolved. It is still reported
-  ([#5](https://github.com/curlewlabs-com/d1-follow/issues/5)).
 
 ## The idea
 
@@ -411,8 +369,18 @@ resolve. Observing a registered slot acts on nothing, so the pass does not renew
 the lease around it: the stamp an answer leads to never moves a slot's
 verification back, and the pass renews the lease before it takes a slot out of
 the registry, which it does only while the slot carries the verification the
-pass read. It reads the registry once a pass and applies its own changes to that
-copy.
+pass read, and a stamp matches a slot only in the colo its answer came from. It
+reads the registry once a pass and applies its own changes to that copy.
+
+A check after a call cannot undo a call that takes effect late, after the lease
+lapsed and another pass took over. So each call that writes to an object (a
+placement, a mark in place, a release) carries a deadline a tenth of the lease
+before the lease lapses, and the object refuses the call once its own clock
+reads past it. The margin leaves room for the creator's clock and the object's
+to disagree. A refused call is a failed one: its attempt stays open for the pass
+that holds the lease. Every path that empties an object, the cleanups included,
+first checks the names the creator must keep: the app's protected names and each
+lane's holder.
 
 **Candidate colos.** The creator assumes nothing about which colos host Durable
 Objects or how many there are. Its probes are at most a fixed number a pass, and

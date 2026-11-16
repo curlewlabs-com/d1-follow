@@ -47,6 +47,8 @@ export async function observeSpares(pass: {
   readonly now: () => number;
   readonly newOpId: () => string;
   readonly hold: () => Promise<void>;
+  // The deadline a call that acts carries (CreatorClass.place).
+  readonly deadline: () => number;
   readonly fail: (line: string) => void;
   readonly log: (line: string) => void;
 }): Promise<{
@@ -69,7 +71,7 @@ export async function observeSpares(pass: {
     await pass.hold();
     let answer: ObserveResult | null = null;
     try {
-      answer = await cls.markInPlace(spare.name);
+      answer = await cls.markInPlace(spare.name, pass.deadline());
     } catch (error) {
       pass.fail(`mark spare ${spare.name} in place: ${message(error)}`);
     }
