@@ -14,7 +14,8 @@ bun run test
 
 Curlew Labs maintains this project. Jeffrey Wall
 ([jeffwall-curlewlabs](https://github.com/jeffwall-curlewlabs)) reviews changes
-and approves releases. Use issues for reproducible defects and proposals; use
+and approves the releases that [need approval](#releases). Use issues for
+reproducible defects and proposals; use
 [private vulnerability reporting](SECURITY.md) for security concerns.
 
 Changes land through pull requests with passing CI and maintainer review. A
@@ -22,6 +23,11 @@ change to a schema in `schema/` must be additive (README sec."Schema changes").
 Every dependency is pinned to an exact version.
 
 ## Releases
+
+A patch or minor release needs no approval beyond the checks in the steps below:
+whoever cuts it follows them in order, and each step's check is the gate. A
+major version, a 1.0, or a minor before 1.0 that changes an interface consumers
+use needs the maintainer's explicit approval before its tag is pushed.
 
 1. Set `version` in `package.json` on `main`.
 2. Push the tag `vX.Y.Z` at that commit. The Release workflow runs CI, packs the
