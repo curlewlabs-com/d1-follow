@@ -36,7 +36,7 @@ jobs:
         run: bun pm pack --destination "$RUNNER_TEMP"
       - name: Check the tarball's contents
         run: |
-          tar -tzf "$RUNNER_TEMP"/d1-follow-*.tgz | sort > "$RUNNER_TEMP/packed.txt"
+          tar -tzf "$RUNNER_TEMP"/curlewlabs-com-d1-follow-*.tgz | sort > "$RUNNER_TEMP/packed.txt"
           cat "$RUNNER_TEMP/packed.txt"
           grep -qx 'package/src/index.ts' "$RUNNER_TEMP/packed.txt"
           grep -qx 'package/schema/creator.sql' "$RUNNER_TEMP/packed.txt"

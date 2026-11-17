@@ -39,12 +39,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" "$RUNNER_TEMP"/d1-follow-*.tgz \
+          gh release create "$TAG" "$RUNNER_TEMP"/curlewlabs-com-d1-follow-*.tgz \
             --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "$TAG" \
             --notes-file - <<NOTES
           Install:
 
-              bun add https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/d1-follow-${TAG#v}.tgz
+              bun add https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/curlewlabs-com-d1-follow-${TAG#v}.tgz
 
           See README.md sec. "Status" for what this release builds.
           NOTES

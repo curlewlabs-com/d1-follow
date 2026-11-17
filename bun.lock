@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "d1-follow",
+      "name": "@curlewlabs-com/d1-follow",
       "devDependencies": {
         "@types/bun": "1.4.4",
         "prettier": "3.9.10",

@@ -69,20 +69,21 @@ ships TypeScript source, so it needs a bundler or test runner that compiles
 TypeScript, as Wrangler and `@cloudflare/vitest-plugin` do:
 
 ```sh
-bun add https://github.com/curlewlabs-com/d1-follow/releases/download/v0.2.0/d1-follow-0.2.0.tgz
+bun add https://github.com/curlewlabs-com/d1-follow/releases/download/v0.3.0/curlewlabs-com-d1-follow-0.3.0.tgz
 ```
 
 The lockfile records the tarball's integrity, and each release is immutable.
 
 The package has two schemas, exported as files:
 
-- `d1-follow/schema/lane.sql`: the lane tables. Apply them to **your app's**
-  database, through your own migrations, even if you use no lane: the creator
-  reads them on every pass, for the lane holders it must never release.
-- `d1-follow/schema/creator.sql`: the creator's database. Every statement is
-  idempotent (`IF NOT EXISTS`, `INSERT OR IGNORE`), so the creator's deploy can
-  apply it whole every time (for example
-  `wrangler d1 execute <creator-db> --remote --file node_modules/d1-follow/schema/creator.sql`).
+- `@curlewlabs-com/d1-follow/schema/lane.sql`: the lane tables. Apply them to
+  **your app's** database, through your own migrations, even if you use no lane:
+  the creator reads them on every pass, for the lane holders it must never
+  release.
+- `@curlewlabs-com/d1-follow/schema/creator.sql`: the creator's database. Every
+  statement is idempotent (`IF NOT EXISTS`, `INSERT OR IGNORE`), so the
+  creator's deploy can apply it whole every time (for example
+  `wrangler d1 execute <creator-db> --remote --file node_modules/@curlewlabs-com/d1-follow/schema/creator.sql`).
 
 ### Observe, in every object
 
@@ -97,7 +98,7 @@ import {
   PrimaryObserver,
   readTraceColo,
   SelfColoCache,
-} from "d1-follow";
+} from "@curlewlabs-com/d1-follow";
 
 const selfColo = new SelfColoCache();
 const primary = new PrimaryObserver();
