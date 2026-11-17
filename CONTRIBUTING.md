@@ -1,5 +1,12 @@
 # Contributing
 
+Thanks for your interest in improving `d1-follow`. The bar for a change is
+whether it keeps a Worker's Durable Objects beside its D1 database's primary as
+the primary moves, and leaves every object serving where it is when the package
+cannot tell where the primary is. Bug fixes, the pieces the README's
+[Status](README.md#status) still lists as design, sharper reports from the
+creator and the census, and clearer docs are all welcome.
+
 Use [Bun](https://bun.sh) 1.4.4. Keep changes on a branch and open a pull
 request that says what behavior changes and how you verified it.
 
@@ -21,6 +28,15 @@ reproducible defects and proposals; use
 Changes land through pull requests with passing CI and maintainer review. A
 change to a schema in `schema/` must be additive (README sec."Schema changes").
 Every dependency is pinned to an exact version.
+
+## Before a large change
+
+Open an issue describing the problem first. The design in the README carries the
+invariants: a stateless object decides before any D1 work and forwards a request
+at most once, a lane changes hands only inside its holder's lock, and the
+creator acts only while it holds its pass lease and never empties an object it
+must keep. A feature belongs here only if it stays useful with the app swapped
+for another. A short discussion up front saves rework.
 
 ## Releases
 
