@@ -24,10 +24,10 @@ Every dependency is pinned to an exact version.
 
 ## Releases
 
-A patch or minor release needs no approval beyond the checks in the steps below:
-whoever cuts it follows them in order, and each step's check is the gate. A
-major version, a 1.0, or a minor before 1.0 that changes an interface consumers
-use needs the maintainer's explicit approval before its tag is pushed.
+A patch or minor release needs no approval: whoever cuts it follows the steps
+below in order, on a `main` commit whose required checks have passed. A major
+version, a 1.0, or a minor before 1.0 that changes an interface consumers use
+needs the maintainer's explicit approval before its tag is pushed.
 
 1. Set `version` in `package.json` on `main`.
 2. Push the tag `vX.Y.Z` at that commit. The Release workflow runs CI, packs the
