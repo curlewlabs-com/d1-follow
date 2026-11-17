@@ -1,4 +1,5 @@
-// The package's public surface: what an adopting app imports from d1-follow.
+// The package's public surface: what an adopting app imports from
+// @curlewlabs-com/d1-follow.
 export { parseColo, type Colo } from "./colo";
 export {
   currentObservation,
