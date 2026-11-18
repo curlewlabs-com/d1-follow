@@ -53,6 +53,6 @@ needs the maintainer's explicit approval before its tag is pushed.
 
 ## License
 
-By submitting a contribution for inclusion in this project, you agree that it
-is licensed under the MIT and Apache-2.0 licenses, as the README's License
-section describes, without any additional terms or conditions.
+By submitting a contribution for inclusion in this project, you agree that it is
+licensed under the MIT and Apache-2.0 licenses, as the README's License section
+describes, without any additional terms or conditions.

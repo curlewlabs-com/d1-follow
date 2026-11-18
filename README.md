@@ -644,8 +644,8 @@ under either license.
 
 ### Contribution
 
-By submitting a contribution for inclusion in this project, you agree that it
-is dual licensed as above, without any additional terms or conditions.
+By submitting a contribution for inclusion in this project, you agree that it is
+dual licensed as above, without any additional terms or conditions.
 
 [where.durableobjects.live](https://where.durableobjects.live/) is cited above
 only as evidence of where hinted creations land. Its source is GPL-3.0, so none
