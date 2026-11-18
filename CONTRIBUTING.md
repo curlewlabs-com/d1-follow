@@ -50,3 +50,10 @@ needs the maintainer's explicit approval before its tag is pushed.
    tarball and opens a draft release with it attached.
 3. Check the draft, then publish it. Releases are immutable: a published
    release's tag and assets cannot be changed, so a fix is a new version.
+
+## License
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you, as defined in the Apache-2.0 license,
+shall be dual licensed under the MIT and Apache-2.0 licenses, as the README's
+License section describes, without any additional terms or conditions.
