@@ -28,6 +28,9 @@ jobs:
         with:
           # renovate: datasource=github-releases depName=oven-sh/bun extractVersion=^bun-v(?<version>.+)$
           bun-version: 1.4.4
+          # A release builds what it publishes from the lockfile alone, so no
+          # cache another run wrote can feed into it.
+          no-cache: true
       - name: Check the tag matches package.json
         env:
           TAG: ${{ github.ref_name }}
