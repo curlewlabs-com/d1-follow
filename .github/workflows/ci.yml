@@ -41,7 +41,8 @@ jobs:
           grep -qx 'package/src/index.ts' "$RUNNER_TEMP/packed.txt"
           grep -qx 'package/schema/creator.sql' "$RUNNER_TEMP/packed.txt"
           grep -qx 'package/schema/lane.sql' "$RUNNER_TEMP/packed.txt"
-          grep -qx 'package/LICENSE' "$RUNNER_TEMP/packed.txt"
+          grep -qx 'package/LICENSE-MIT' "$RUNNER_TEMP/packed.txt"
+          grep -qx 'package/LICENSE-APACHE' "$RUNNER_TEMP/packed.txt"
           if grep -E '\.test\.ts$|test-harness|test-handle|test-timeout' "$RUNNER_TEMP/packed.txt"; then
             echo "test files in the tarball" >&2
             exit 1

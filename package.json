@@ -2,7 +2,7 @@
   "name": "@curlewlabs-com/d1-follow",
   "version": "0.3.0",
   "description": "Keep a Cloudflare Worker's Durable Objects beside its D1 database's primary as the primary moves.",
-  "license": "MIT",
+  "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/curlewlabs-com/d1-follow.git"
@@ -22,7 +22,8 @@
     "!src/test-timeout.ts",
     "schema/*.sql",
     "README.md",
-    "LICENSE"
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",

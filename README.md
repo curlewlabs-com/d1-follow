@@ -634,7 +634,19 @@ comment says why it is what it is.
 
 ## License
 
-MIT; see [LICENSE](LICENSE).
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option. Releases published under the MIT license alone may also be used
+under either license.
+
+### Contribution
+
+By submitting a contribution for inclusion in this project, you agree that it is
+dual licensed as above, without any additional terms or conditions.
+
 [where.durableobjects.live](https://where.durableobjects.live/) is cited above
 only as evidence of where hinted creations land. Its source is GPL-3.0, so none
 of it is copied or adapted here, and none may be.
