@@ -12,7 +12,6 @@ request that says what behavior changes and how you verified it.
 
 ```sh
 bun install --frozen-lockfile
-bun run format:check
 bun run typecheck
 bun run test
 ```

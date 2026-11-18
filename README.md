@@ -616,7 +616,6 @@ Requires [Bun](https://bun.sh) 1.4.4.
 bun install --frozen-lockfile
 bun run typecheck
 bun run test
-bun run format:check
 ```
 
 The sources are pure functions and small classes with no package dependency: an
