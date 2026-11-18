@@ -27,13 +27,10 @@
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "bun test --no-install --timeout $(bun --no-install src/test-timeout.ts) src",
-    "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "test": "bun test --no-install --timeout $(bun --no-install src/test-timeout.ts) src"
   },
   "devDependencies": {
     "@types/bun": "1.4.4",
-    "prettier": "3.9.10",
     "typescript": "7.0.2"
   }
 }
