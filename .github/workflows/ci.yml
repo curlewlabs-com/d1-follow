@@ -47,8 +47,6 @@ jobs:
             exit 1
           fi
 
-  # The one check branch protection requires, so the jobs above can be
-  # renamed or split without editing the protection.
   baseline:
     # The checks every Curlew Labs repository runs, in one place:
     # https://github.com/curlewlabs-com/ci-baseline
@@ -61,6 +59,8 @@ jobs:
       - uses: curlewlabs-com/ci-baseline@f05f17a38ba2dfbaf0cde130a375b346e9a923a2 # v0.2.0
 
   conclusion:
+    # The one check branch protection requires, so the jobs above can be
+    # renamed or split without editing the protection.
     needs: [test, baseline]
     runs-on: ubuntu-24.04
     if: always()
