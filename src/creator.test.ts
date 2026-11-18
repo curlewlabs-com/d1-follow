@@ -519,7 +519,7 @@ describe("the lane change log", () => {
   // The ledger is the one account of every move, so each change the app's log
   // holds is copied, once, however many passes see it.
   test("copies each change into the ledger once", async () => {
-    world.app.exec(
+    world.app.run(
       "INSERT INTO follow_lane_change (lane, seq, from_holder, to_holder, changed_at_ms, changed_by) VALUES (1, 1, NULL, 'lane-a', 10, 1), (1, 2, 'lane-a', 'lane-b', 20, 3)",
     );
     const cls = scriptedClass([]);

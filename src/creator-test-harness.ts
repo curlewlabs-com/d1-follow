@@ -44,29 +44,37 @@ function sqliteHandle(
     values: unknown[],
   ): SqlStatement & { rows(): unknown[] } => ({
     bind: (...next: unknown[]) => statement(query, next),
-    all: async () => {
-      const meta = metaOf?.(query);
-      const results = statement(query, values).rows();
-      onRead?.(query, results);
-      return meta === undefined ? { results } : { results, meta };
-    },
-    run: async () => statement(query, values).rows(),
+    all: () =>
+      new Promise((resolve) => {
+        const meta = metaOf?.(query);
+        const results = statement(query, values).rows();
+        onRead?.(query, results);
+        resolve(meta === undefined ? { results } : { results, meta });
+      }),
+    run: () =>
+      new Promise((resolve) => {
+        resolve(statement(query, values).rows());
+      }),
     rows: () => sqlite.query(query).all(...(values as SQLQueryBindings[])),
   });
   return {
     prepare: (query) => statement(query, []),
-    batch: async (statements) =>
-      sqlite.transaction(() =>
-        statements.map((s) => ({
-          results: (s as ReturnType<typeof statement>).rows(),
-        })),
-      )(),
+    batch: (statements) =>
+      new Promise((resolve) => {
+        resolve(
+          sqlite.transaction(() =>
+            statements.map((s) => ({
+              results: (s as ReturnType<typeof statement>).rows(),
+            })),
+          )(),
+        );
+      }),
   };
 }
 
 async function database(schema: string): Promise<Database> {
   const sqlite = new Database(":memory:");
-  sqlite.exec(
+  sqlite.run(
     await Bun.file(new URL(`../schema/${schema}`, import.meta.url)).text(),
   );
   return sqlite;
@@ -109,34 +117,38 @@ export function scriptedClass(
     nameOf: (n, hint) => `scheduler-test-${hint}-${n}`,
     objectIdOf: (name) => `id-${name}`,
     spares: 0,
-    observe: async (name, hint) => {
-      if (silent.has(name)) throw new Error("no answer");
+    observe: (name, hint) => {
+      if (silent.has(name)) return Promise.reject(new Error("no answer"));
       if (!where.has(name) && hint !== null) {
         const colo = (byHint[hint] ?? landings).shift();
-        if (colo === undefined) throw new Error("no landing scripted");
+        if (colo === undefined) {
+          return Promise.reject(new Error("no landing scripted"));
+        }
         where.set(name, colo);
       }
-      return {
+      return Promise.resolve({
         colo: where.get(name) ?? null,
         markedColo: marked.get(name) ?? null,
-      };
+      });
     },
-    markInPlace: async (name) => {
+    markInPlace: (name) => {
       if (silent.has(name) || unmarkable.has(name)) {
-        throw new Error("no answer");
+        return Promise.reject(new Error("no answer"));
       }
       const scripted = markAnswers.get(name);
-      if (scripted !== undefined) return scripted;
+      if (scripted !== undefined) return Promise.resolve(scripted);
       const colo = where.get(name) ?? null;
       if (colo !== null) marked.set(name, colo);
-      return { colo, markedColo: marked.get(name) ?? null };
+      return Promise.resolve({ colo, markedColo: marked.get(name) ?? null });
     },
-    place: async (name, colo) => {
+    place: (name, colo) => {
       placed.push(name);
       marked.set(name, colo);
+      return Promise.resolve();
     },
-    release: async (name) => {
+    release: (name) => {
       releasedNames.push(name);
+      return Promise.resolve();
     },
     where,
     marked,
