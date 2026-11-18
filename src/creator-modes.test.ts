@@ -20,7 +20,7 @@ let db: SqlDatabase;
 
 beforeEach(async () => {
   sqlite = new Database(":memory:");
-  sqlite.exec(
+  sqlite.run(
     await Bun.file(new URL("../schema/creator.sql", import.meta.url)).text(),
   );
   db = sqliteHandle(sqlite);

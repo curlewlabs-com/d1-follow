@@ -42,7 +42,7 @@ beforeEach(async () => {
     new URL("../schema/creator.sql", import.meta.url),
   ).text();
   sqlite = new Database(":memory:");
-  sqlite.exec(schema);
+  sqlite.run(schema);
   db = sqliteHandle(sqlite);
 });
 
@@ -307,7 +307,7 @@ describe("the spares", () => {
       )
       .run(STATELESS_CLASS, MIA, "legacy-01", "id-legacy-01", AT_MS);
     expect(identities()).toEqual([]);
-    sqlite.exec(schema);
+    sqlite.run(schema);
     expect(identities()).toEqual([["legacy-01", "id-legacy-01"]]);
     await expect(
       registerSpare(

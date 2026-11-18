@@ -105,7 +105,7 @@ describe("the lane's run", () => {
 // is what D1 runs; an app finds out otherwise only at its own schema deploy.
 test("schema/lane.sql applies to SQLite", async () => {
   const sqlite = new Database(":memory:");
-  sqlite.exec(
+  sqlite.run(
     await Bun.file(new URL("../schema/lane.sql", import.meta.url)).text(),
   );
   const tables = sqlite
@@ -126,7 +126,7 @@ test.each([
   ["an empty new holder", 1, 2, "lane-a", ""],
 ])("lane.sql's change log refuses %s", async (_, lane, seq, from, to) => {
   const sqlite = new Database(":memory:");
-  sqlite.exec(
+  sqlite.run(
     await Bun.file(new URL("../schema/lane.sql", import.meta.url)).text(),
   );
   expect(() =>
@@ -144,7 +144,7 @@ test.each(["ord", "OR", "123"])(
   "lane.sql's record refuses the run colo %s",
   async (runColo) => {
     const sqlite = new Database(":memory:");
-    sqlite.exec(
+    sqlite.run(
       await Bun.file(new URL("../schema/lane.sql", import.meta.url)).text(),
     );
     expect(() =>
@@ -161,7 +161,7 @@ test.each(["ord", "OR", "123"])(
 // check and not from a column that takes nothing.
 test("lane.sql's record accepts an uppercase colo as the run colo", async () => {
   const sqlite = new Database(":memory:");
-  sqlite.exec(
+  sqlite.run(
     await Bun.file(new URL("../schema/lane.sql", import.meta.url)).text(),
   );
   sqlite

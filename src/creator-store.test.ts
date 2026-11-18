@@ -53,7 +53,7 @@ let db: SqlDatabase;
 
 beforeEach(async () => {
   sqlite = new Database(":memory:");
-  sqlite.exec(
+  sqlite.run(
     await Bun.file(new URL("../schema/creator.sql", import.meta.url)).text(),
   );
   db = sqliteHandle(sqlite);
@@ -110,7 +110,7 @@ test("the schema applies again over itself, keeping every row", async () => {
     nameOf: (n) => `slot-${n}`,
     objectIdOf: idOf,
   });
-  sqlite.exec(
+  sqlite.run(
     await Bun.file(new URL("../schema/creator.sql", import.meta.url)).text(),
   );
   expect(ledger()).toHaveLength(1);
@@ -863,7 +863,7 @@ describe("app-database query plans", () => {
     "%s searches follow_lane_change only through its key",
     async (_, sql) => {
       const app = new Database(":memory:");
-      app.exec(
+      app.run(
         await Bun.file(new URL("../schema/lane.sql", import.meta.url)).text(),
       );
       const plan = app.query(`EXPLAIN QUERY PLAN ${sql}`).all() as {
