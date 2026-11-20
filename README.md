@@ -512,7 +512,10 @@ before addressing it and before dispatch at the receiver, allowing for clock
 skew. The spare's last verification anchors its release bound because a creator
 can decide to unregister before the registry write becomes visible. A release
 delay must outlast outstanding answers, including through restores and
-configuration changes. During a restore, stop issuance, drain outstanding
+configuration changes. Operator placement and cleanup should read
+`readPlacementClaim(creatorDb, name)` before mutating storage. Refuse a
+registered name and honor the class's release delay from a pending claim's
+`unregisteredAtMs`, as the scheduled releaser does. During a restore, stop issuance, drain outstanding
 answers and reverify restored markers before resuming. This lookup does not make
 a timed-out write safe to retry. An abandonable attempt must return a target
 that starts route work only when its caller selects it. Once execution has been

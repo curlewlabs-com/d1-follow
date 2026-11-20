@@ -5,18 +5,25 @@
 // unregistration's batch removes it under the same condition its slot row is
 // removed by.
 import {
+  CreatorStoreError,
   integerField,
   type SqlDatabase,
   type SqlStatement,
 } from "./creator-store";
+
+const registeredByName =
+  "SELECT class_code FROM (SELECT name, class_code FROM follow_slot UNION ALL SELECT name, class_code FROM follow_spare) WHERE name = ?";
 
 // Every statement this module runs, so the store's tests check each one's
 // query plan beside the rest.
 export const SLOT_IDENTITY_SQL = {
   // Each arm searches its table's name index: SQLite pushes the outer
   // predicate into a UNION ALL subquery.
-  readRegisteredClass:
-    "SELECT class_code FROM (SELECT name, class_code FROM follow_slot UNION ALL SELECT name, class_code FROM follow_spare) WHERE name = ?",
+  readRegisteredClass: registeredByName,
+  // Unregistration moves the name to the release queue in a transaction.
+  // Read either side in the same snapshot so an outstanding hold stays visible.
+  readPlacementClaim: `SELECT class_code, NULL AS unregistered_at_ms FROM (${registeredByName})
+    UNION ALL SELECT class_code, unregistered_at_ms FROM follow_release_pending WHERE name = ?`,
   holdIdentity: "INSERT INTO follow_slot_name (name, object_id) VALUES (?, ?)",
   releaseBaseIdentity:
     "DELETE FROM follow_slot_name WHERE name = ? AND EXISTS (SELECT 1 FROM follow_slot WHERE follow_slot.name = follow_slot_name.name AND verified_at_ms IS ?)",
@@ -64,4 +71,36 @@ export async function registeredClassOf(
     .all();
   const [row] = results;
   return row === undefined ? null : integerField(row, "class_code");
+}
+
+export type PlacementClaim =
+  | { readonly kind: "registered"; readonly classCode: number }
+  | {
+      readonly kind: "pending_release";
+      readonly classCode: number;
+      readonly unregisteredAtMs: number;
+    };
+
+// An external placement or cleanup must honor the class's release delay too.
+// The pending row supplies the same hold origin used by the scheduled release.
+export async function readPlacementClaim(
+  db: SqlDatabase,
+  name: string,
+): Promise<PlacementClaim | null> {
+  const { results } = await db
+    .prepare(SLOT_IDENTITY_SQL.readPlacementClaim)
+    .bind(name, name)
+    .all();
+  const [row] = results;
+  if (row === undefined) return null;
+  if (results.length !== 1)
+    throw new CreatorStoreError("conflicting placement claims for " + name);
+  const classCode = integerField(row, "class_code");
+  if ((row as Record<string, unknown>)["unregistered_at_ms"] === null)
+    return { kind: "registered", classCode };
+  return {
+    kind: "pending_release",
+    classCode,
+    unregisteredAtMs: integerField(row, "unregistered_at_ms"),
+  };
 }

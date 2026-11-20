@@ -80,7 +80,11 @@ export {
   type StandbyLookup,
   type VerifiedStandby,
 } from "./verified-standby";
-export { registeredClassOf } from "./slot-identity";
+export {
+  registeredClassOf,
+  readPlacementClaim,
+  type PlacementClaim,
+} from "./slot-identity";
 export {
   forwardCoolingDown,
   hintAfter,
