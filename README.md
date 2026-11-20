@@ -534,15 +534,19 @@ cold start and execution before the caller gives up.
 
 ### Guard placement and release
 
-Use fresh names in a separate namespace for operator placement. Leave release
-of creator-managed names to the creator whenever possible. If an operator
-must clean up such a name, first fence the creator against new passes and
-wait for the active lease and all outstanding placement and mark-in-place
-deadlines to expire. A failed call can still arrive and write a marker after
-cleanup. For an object that can hold a lane, also prevent new handoffs to it
-and drain any in-flight handoffs before reading the current holder. Keep
-both fences through the storage mutation. If handoffs cannot be fenced,
-leave release to the creator.
+Use fresh names in a separate namespace for operator placement. Before manual
+cleanup of a creator-managed name, prevent new creator passes and confirm
+every active pass has stopped. A holder can renew an expired lease until
+another holder takes it. After the passes stop, let all outstanding mutation
+calls finish or reach their receiver deadlines before reading claims. Keep
+new passes fenced through the storage mutation.
+
+For an object eligible to hold a lane, the application must serialize both
+scheduled and manual cleanup with handoffs to that object. Prevent new
+handoffs and drain in-flight ones before checking the holder; retain that
+exclusion through the mutation. A handoff may already have validated the
+target and still be able to assign it. Defer cleanup if the application
+cannot establish exclusion.
 
 At the mutation receiver, refuse every serving name, current lane holder and
 member of `CreatorConfig.protectedNames`. Read `readPlacementClaim(creatorDb,
