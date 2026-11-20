@@ -1,6 +1,6 @@
 {
   "name": "@curlewlabs-com/d1-follow",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Keep a Cloudflare Worker's Durable Objects beside its D1 database's primary as the primary moves.",
   "license": "MIT OR Apache-2.0",
   "repository": {

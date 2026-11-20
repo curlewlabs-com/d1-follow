@@ -69,7 +69,7 @@ ships TypeScript source, so it needs a bundler or test runner that compiles
 TypeScript, as Wrangler and `@cloudflare/vitest-plugin` do:
 
 ```sh
-bun add https://github.com/curlewlabs-com/d1-follow/releases/download/v0.3.0/curlewlabs-com-d1-follow-0.3.0.tgz
+bun add https://github.com/curlewlabs-com/d1-follow/releases/download/v0.4.0/curlewlabs-com-d1-follow-0.4.0.tgz
 ```
 
 The lockfile records the tarball's integrity, and each release is immutable.
@@ -172,6 +172,8 @@ Built:
 - the schemas and store statements in
   [Where the state lives](#where-the-state-lives);
 - the creator's pass (`runCreatorPass`), including spares in the primary's colo;
+- the [standby lookup](#discover-a-standby-after-a-missed-accept) for a caller
+  whose serving object has not accepted;
 - the [census](#census) (`takeCensus`);
 - the stateless router's decisions (`routeRequest`, `hintAfter`).
 
@@ -179,8 +181,8 @@ Still design:
 
 - the lane's swap of its record to the new holder, and the operator's handoff
   call;
-- failover's use of a spare as its standby, and the placement audit's reading of
-  a standby's name.
+- the app's selection and execution of a standby request, and its audit of the
+  standby's registration at the time it served.
 
 The rest of this README is the design, built parts and unbuilt alike.
 
@@ -425,19 +427,19 @@ promotes one when the primary's colo loses its base slot, and takes out any
 beyond the class's count, keeping verified ones first; a spare counts against
 the count once registered and toward the class's readiness only once verified
 (`src/creator-spares.ts`). An app sets each class's count
-(`CreatorClass.spares`). Not built: failover's use of a spare as its standby,
-and the placement audit's reading of a standby's name, which come with the
-standby. An app may keep spares of a class beside the base slot in the colo its
-primary is in, and only there: that is where a request is served and where a
-lane hands off, so it is where a colo-mate is worth its observe call.
-`follow_slot`'s key is `(class_code, colo)`, which gives every slot of a class
-in a colo the same identity, so a spare cannot be a row there, and re-keying
-that table would need every reader cut over behind rollback floors. So the
-registry stays as it is, holding the base slots, and the spares go in a table of
-their own, keyed by name, keeping `object_id` and its uniqueness, which the
-census reconciles objects by, with the class, the colo and the stamps as columns
-and an index on class and colo. It is a new table, so the change is additive
-under the rules below.
+(`CreatorClass.spares`). A caller can discover a verified standby as described
+below. The caller owns execution and its placement audit. An app may keep spares
+of a class beside the base slot in the colo its primary is in, and only there:
+that is where a request is served and where a lane hands off, so it is where a
+colo-mate is worth its observe call. `follow_slot`'s key is
+`(class_code, colo)`, which gives every slot of a class in a colo the same
+identity, so a spare cannot be a row there, and re-keying that table would need
+every reader cut over behind rollback floors. So the registry stays as it is,
+holding the base slots, and the spares go in a table of their own, keyed by
+name, keeping `object_id` and its uniqueness, which the census reconciles
+objects by, with the class, the colo and the stamps as columns and an index on
+class and colo. It is a new table, so the change is additive under the rules
+below.
 
 - **Where spares live.** The app sets how many spares each class keeps; the
   creator keeps them in the primary's colo, filling them through the attempts
@@ -487,6 +489,43 @@ under the rules below.
   was released after the restore point, so a restore checks each spare row
   against its object's marker before the creator acts again.
 
+### Discover a standby after a missed accept
+
+An edge that has never received a response can ask a separate, read-only service
+for a standby. The service calls `readPrimary(appDb, reportFailure)` to observe
+the app primary. If the observation succeeds, it calls
+`readVerifiedStandby(creatorDb, input)` with that colo, the class, the name the
+edge attempted, its own configured serving name, the time immediately before the
+registry read and the class's verification and release intervals.
+
+For the exact configured name, a verified spare stays eligible even after the
+unreachable base is unregistered. Load that configured name from trusted
+deployment configuration independently of the caller. For a different attempted
+name the same registry snapshot must also hold its fresh base registration. The
+target always comes from the spare table, in the observed primary colo, and
+differs from the attempted name. The read returns null when no candidate
+qualifies. A database failure rejects the read.
+
+Use the returned name only for the request that triggered discovery. Validate
+its class and environment naming convention and check its expiry immediately
+before addressing it and before dispatch at the receiver, allowing for clock
+skew. A release delay must outlast outstanding answers, including through
+restores and configuration changes. During a restore, stop issuance, drain
+outstanding answers and reverify restored markers before resuming. This lookup
+does not make a timed-out write safe to retry. An abandonable attempt must
+return a target that starts route work only when its caller selects it. Once
+execution has been sent, losing its result cannot authorize another execution.
+
+**Measuring the accept window.** In an adopting deployment, each side recorded
+its own elapsed time, joined offline by a per-attempt ID. Subtracting the
+object's handler time from the caller's full RPC time gave a proxy for the
+accept round trip. The residual was 68 ms at the median, 249 ms at p99 and 571
+ms at p99.9. First calls on a previously idle new isolate had a median of 144 ms
+and p99 of 505 ms, with 0.40% exceeding 1,500 ms. Some original calls started
+2.361 to 8.694 seconds after their caller's 10-second timeout. This proxy
+includes returning the result. Measure direct time to the prepare target and
+count calls that never return one before choosing a window for a deployment.
+
 ## Where the state lives
 
 The tool's state is split by who reads it on a hot path:
@@ -500,14 +539,14 @@ The tool's state is split by who reads it on a hot path:
 - **The creator's database: the registry, its spares, the ledger, the modes, and
   the creator's own working state** (the candidate colos, the region hints it
   added, the name counter, the open creation intents, the objects waiting for
-  release, each class's backoff, and the pass lease). No hot path reads them. A
-  stateless object reads the registry and its mode in the background, cached, at
-  most once every ten minutes. A lane reads them only when its run reaches the
-  threshold. The creator and the audit read them on their own schedules. The app
-  binds the creator's database for those reads. Its placement method also reads
-  the registry and the spares, uncached, and refuses to place or release a name
-  either holds (`registeredClassOf`), since the creator takes a slot or a spare
-  out of its table before it releases it.
+  release, each class's backoff, and the pass lease). An overdue accept can
+  trigger a standby lookup. A stateless object reads the registry and its mode
+  in the background, cached, at most once every ten minutes. A lane reads them
+  only when its run reaches the threshold. The creator and the audit read them
+  on their own schedules. The app binds the creator's database for those reads.
+  Its placement method also reads the registry and the spares, uncached, and
+  refuses to place or release a name either holds (`registeredClassOf`), since
+  the creator takes a slot or a spare out of its table before it releases it.
 
 The creator copies each lane change from the change log into the ledger on its
 next pass, so the ledger stays the one account of every move. Keeping the
