@@ -12,6 +12,8 @@ export {
   D1_REGION_HINTS,
   PrimaryObserver,
   primaryColoOf,
+  readPrimary,
+  type PrimaryPlacement,
   type PrimarySighting,
 } from "./primary-colo";
 export {
@@ -73,6 +75,11 @@ export {
   readLaneHolders,
   type LaneChangeRow,
 } from "./app-lane-reads";
+export {
+  readVerifiedStandby,
+  type StandbyLookup,
+  type VerifiedStandby,
+} from "./verified-standby";
 export { registeredClassOf } from "./slot-identity";
 export {
   forwardCoolingDown,

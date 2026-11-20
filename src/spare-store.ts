@@ -140,9 +140,14 @@ export async function unregisterSpare(
         spare.name,
         spare.verifiedAtMs,
       ),
+    // A clock correction cannot let release outrun an issued standby answer.
     db
       .prepare(SPARE_SQL.holdSpareForRelease)
-      .bind(record.atMs, spare.name, spare.verifiedAtMs),
+      .bind(
+        Math.max(record.atMs, spare.verifiedAtMs ?? record.atMs),
+        spare.name,
+        spare.verifiedAtMs,
+      ),
     releaseIdentity(db, "spare", spare),
     db.prepare(SPARE_SQL.deleteSpare).bind(spare.name, spare.verifiedAtMs),
   ]);
