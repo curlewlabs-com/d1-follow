@@ -539,7 +539,10 @@ of creator-managed names to the creator whenever possible. If an operator
 must clean up such a name, first fence the creator against new passes and
 wait for the active lease and all outstanding placement and mark-in-place
 deadlines to expire. A failed call can still arrive and write a marker after
-cleanup. Keep that fence through the operation.
+cleanup. For an object that can hold a lane, also prevent new handoffs to it
+and drain any in-flight handoffs before reading the current holder. Keep
+both fences through the storage mutation. If handoffs cannot be fenced,
+leave release to the creator.
 
 At the mutation receiver, refuse every serving name, current lane holder and
 member of `CreatorConfig.protectedNames`. Read `readPlacementClaim(creatorDb,

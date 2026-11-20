@@ -270,6 +270,22 @@ describe("the spares", () => {
     });
   });
 
+  // A reseed can register a name whose previous release is still queued.
+  // Returning only the pending row would let cleanup empty a live spare.
+  test("cleanup refuses conflicting registered and pending claims", async () => {
+    const spare = slot(STATELESS_CLASS, ORD, "spare-01");
+    await registerSpare(db, spare, { opId: "first", kind: "created" });
+    await unregisterSpare(
+      db,
+      { name: spare.name, verifiedAtMs: null },
+      { opId: "removed", atMs: AT_MS + 1, detail: "the primary moved" },
+    );
+    await registerSpare(db, spare, { opId: "reseed", kind: "created" });
+    await expect(readPlacementClaim(db, spare.name)).rejects.toThrow(
+      "conflicting placement claims",
+    );
+  });
+
   // The lookup runs on every placement call, from the codec, against the
   // creator's database: each table must be searched by its name, never
   // scanned, so a name neither holds costs no row.
