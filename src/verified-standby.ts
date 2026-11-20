@@ -28,9 +28,9 @@ const candidate = `s.class_code = ? AND s.colo = ? AND s.name <> ?
 // Registration can change while a request is overdue. A hint and its spare
 // must qualify in the same snapshot. A configured base can stay unreachable
 // beyond unregistration, so its lookup needs only the spare index.
-const fromConfig = `SELECT s.name, s.verified_at_ms AS verified
+const fromConfig = `SELECT s.name, s.verified_at_ms AS spare_verified, s.verified_at_ms AS verified
   FROM follow_spare s WHERE ${candidate}`;
-const fromHint = `SELECT s.name, min(b.verified_at_ms, s.verified_at_ms) AS verified
+const fromHint = `SELECT s.name, s.verified_at_ms AS spare_verified, min(b.verified_at_ms, s.verified_at_ms) AS verified
   FROM follow_slot b JOIN follow_spare s ON b.class_code = s.class_code
   WHERE b.name = ? AND b.verified_at_ms > ? AND b.verified_at_ms <= ?
   AND ${candidate}`;
@@ -50,11 +50,14 @@ export async function readVerifiedStandby(
   if (!attemptedName || !verifiedMaxAgeMs || !releaseAfterMs) return null;
 
   const earliest = Math.max(-1, nowMs - verifiedMaxAgeMs);
+  // An unregister can commit after this read with an earlier decision time.
+  // Its release hold covers the spare's verification, never a later lookup.
+  const spareLifetimeMs = Math.min(verifiedMaxAgeMs, releaseAfterMs);
   const slots = [
     input.classCode,
     input.primaryColo,
     attemptedName,
-    earliest,
+    Math.max(-1, nowMs - spareLifetimeMs),
     nowMs,
   ];
   const statement =
@@ -68,7 +71,7 @@ export async function readVerifiedStandby(
 
   const expiresAtMs = Math.min(
     integerField(row, "verified") + verifiedMaxAgeMs,
-    nowMs + releaseAfterMs,
+    integerField(row, "spare_verified") + releaseAfterMs,
   );
   if (!Number.isSafeInteger(expiresAtMs)) {
     throw new RangeError("standby expiry exceeds the integer time range");

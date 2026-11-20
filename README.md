@@ -509,22 +509,28 @@ qualifies. A database failure rejects the read.
 Use the returned name only for the request that triggered discovery. Validate
 its class and environment naming convention and check its expiry immediately
 before addressing it and before dispatch at the receiver, allowing for clock
-skew. A release delay must outlast outstanding answers, including through
-restores and configuration changes. During a restore, stop issuance, drain
-outstanding answers and reverify restored markers before resuming. This lookup
-does not make a timed-out write safe to retry. An abandonable attempt must
-return a target that starts route work only when its caller selects it. Once
-execution has been sent, losing its result cannot authorize another execution.
+skew. The spare's last verification anchors its release bound because a creator
+can decide to unregister before the registry write becomes visible. A release
+delay must outlast outstanding answers, including through restores and
+configuration changes. During a restore, stop issuance, drain outstanding
+answers and reverify restored markers before resuming. This lookup does not make
+a timed-out write safe to retry. An abandonable attempt must return a target
+that starts route work only when its caller selects it. Once execution has been
+sent, losing its result cannot authorize another execution.
 
 **Measuring the accept window.** In an adopting deployment, each side recorded
 its own elapsed time, joined offline by a per-attempt ID. Subtracting the
 object's handler time from the caller's full RPC time gave a proxy for the
 accept round trip. The residual was 68 ms at the median, 249 ms at p99 and 571
-ms at p99.9. First calls on a previously idle new isolate had a median of 144 ms
-and p99 of 505 ms, with 0.40% exceeding 1,500 ms. Some original calls started
-2.361 to 8.694 seconds after their caller's 10-second timeout. This proxy
-includes returning the result. Measure direct time to the prepare target and
-count calls that never return one before choosing a window for a deployment.
+ms at p99.9. The object's entry counters separated its first serving call on an
+isolate that had run nothing else from calls on a warmed isolate. Full cold
+starts had a median of 144 ms and p99 of 505 ms, with 0.40% exceeding 1,500 ms.
+Later calls had a median residual of 64 ms. Some original calls started 2.361 to
+8.694 seconds after their caller's 10-second timeout. This proxy includes
+returning the result. Measure direct time to the prepare target and count calls
+that never return one before choosing a window for a deployment. The shortest
+client wait must accommodate the accept window, discovery, and the standby's
+cold start and execution before the caller gives up.
 
 ## Where the state lives
 

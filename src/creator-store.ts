@@ -434,10 +434,15 @@ export async function unregisterSlot(
         slot.name,
         slot.verifiedAtMs,
       ),
-    // Out of the registry is not released: the release rule decides when.
+    // A base can be a promoted spare with an outstanding standby answer. A
+    // backward clock must preserve its release hold from verification.
     db
       .prepare(CREATOR_SQL.holdForRelease)
-      .bind(record.atMs, slot.name, slot.verifiedAtMs),
+      .bind(
+        Math.max(record.atMs, slot.verifiedAtMs ?? record.atMs),
+        slot.name,
+        slot.verifiedAtMs,
+      ),
     releaseIdentity(db, "base", slot),
     db.prepare(CREATOR_SQL.deleteSlot).bind(slot.name, slot.verifiedAtMs),
   ]);
@@ -455,6 +460,9 @@ export async function moveSlot(
   slot: Pick<Slot, "name" | "colo" | "verifiedAtMs">,
   to: { readonly colo: Colo; readonly atMs: number; readonly opId: string },
 ): Promise<boolean> {
+  // A moved, promoted spare still owes the release hold from its last
+  // verification. Moving it cannot rewind that stamp on a backward clock.
+  const verifiedAtMs = Math.max(slot.verifiedAtMs ?? to.atMs, to.atMs);
   const results = await db.batch([
     db
       .prepare(CREATOR_SQL.recordUnregistered)
@@ -468,7 +476,7 @@ export async function moveSlot(
       ),
     db
       .prepare(CREATOR_SQL.moveSlot)
-      .bind(to.colo, to.atMs, slot.name, slot.verifiedAtMs),
+      .bind(to.colo, verifiedAtMs, slot.name, slot.verifiedAtMs),
     db
       .prepare(CREATOR_SQL.recordMovedIn)
       .bind(
@@ -478,7 +486,7 @@ export async function moveSlot(
         `moved from ${slot.colo}`,
         slot.name,
         to.colo,
-        to.atMs,
+        verifiedAtMs,
       ),
   ]);
   return returnedRows(results[1], "move's update").length > 0;

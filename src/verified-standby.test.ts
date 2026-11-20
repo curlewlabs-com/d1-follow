@@ -1,6 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { Colo } from "./colo";
+import { moveSlot, unregisterSlot, readReleasePending } from "./creator-store";
+import { unregisterSpare, promoteSpare } from "./spare-store";
 import { sqliteHandle } from "./sqlite-test-handle";
 import { readVerifiedStandby, type StandbyLookup } from "./verified-standby";
 
@@ -54,7 +56,7 @@ test("a configured name outlives its registration but cannot grant a hint that a
   });
   expect(await read({ releaseAfterMs: 200 })).toEqual({
     name: "spare",
-    expiresAtMs: now + 200,
+    expiresAtMs: now + 100,
   });
   expect(await read({ releaseAfterMs: 0 })).toBeNull();
 });
@@ -89,7 +91,54 @@ test("invalid timing cannot issue a name past its safe expiry", async () => {
     read({
       nowMs: Number.MAX_SAFE_INTEGER,
       verifiedMaxAgeMs: Number.MAX_SAFE_INTEGER,
-      releaseAfterMs: 1,
+      releaseAfterMs: Number.MAX_SAFE_INTEGER,
     }),
   ).rejects.toThrow(RangeError);
 });
+
+test.each(["spare", "promoted"] as const)(
+  "pending release of a %s outlasts every issued answer",
+  async (kind) => {
+    const db = sqliteHandle(sqlite);
+    const verifiedAtMs = now - 100;
+    const name = "spare";
+    add("follow_spare", name, verifiedAtMs);
+    add("follow_slot", "hint", now, 1, "MIA");
+    const releaseAfterMs = 200;
+    for (const attemptedName of ["configured", "hint"]) {
+      expect(await read({ attemptedName, releaseAfterMs })).toEqual({
+        name,
+        expiresAtMs: verifiedAtMs + releaseAfterMs,
+      });
+      expect(
+        await read({
+          attemptedName,
+          releaseAfterMs,
+          nowMs: verifiedAtMs + releaseAfterMs,
+        }),
+      ).toBeNull();
+    }
+    // The creator can finish unregistering after the lookup using a timestamp
+    // it took earlier. A clock correction can even put that before verification.
+    if (kind === "promoted") {
+      await promoteSpare(db, name, { opId: "promote", atMs: now });
+      expect(
+        await moveSlot(
+          db,
+          { name, colo: lookup.primaryColo, verifiedAtMs },
+          { opId: "move", colo: "IAD" as Colo, atMs: verifiedAtMs - 1 },
+        ),
+      ).toBe(true);
+    }
+    const unregister = kind === "spare" ? unregisterSpare : unregisterSlot;
+    expect(
+      await unregister(
+        db,
+        { name, verifiedAtMs },
+        { opId: "remove", atMs: verifiedAtMs - 1, detail: "moved" },
+      ),
+    ).toBe(true);
+    const [pending] = await readReleasePending(db);
+    expect(pending?.unregisteredAtMs).toBe(verifiedAtMs);
+  },
+);
