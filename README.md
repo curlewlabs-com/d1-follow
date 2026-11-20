@@ -69,7 +69,7 @@ ships TypeScript source, so it needs a bundler or test runner that compiles
 TypeScript, as Wrangler and `@cloudflare/vitest-plugin` do:
 
 ```sh
-bun add https://github.com/curlewlabs-com/d1-follow/releases/download/v0.4.0/curlewlabs-com-d1-follow-0.4.0.tgz
+bun add https://github.com/curlewlabs-com/d1-follow/releases/download/v0.5.0/curlewlabs-com-d1-follow-0.5.0.tgz
 ```
 
 The lockfile records the tarball's integrity, and each release is immutable.
@@ -534,18 +534,25 @@ cold start and execution before the caller gives up.
 
 ### Guard placement and release
 
-At the mutation receiver, refuse a serving name or current lane holder. Read
-`readPlacementClaim(creatorDb, name)` from the primary without caching and
-refuse the operation if the read fails. A registered base or spare is in use.
-A pending name belongs to the releaser: only explicit cleanup is eligible once
-the class's release delay has elapsed since `unregisteredAtMs`. Use a fresh
-name for placement. A later creator pass can still clear a pending name.
+Use fresh names in a separate namespace for operator placement. Leave release
+of creator-managed names to the creator whenever possible. If an operator
+must clean up such a name, first fence the creator against new passes and
+wait for the active lease and all outstanding placement and mark-in-place
+deadlines to expire. A failed call can still arrive and write a marker after
+cleanup. Keep that fence through the operation.
 
-A null result describes the registry and release queue at the time of the
-read. A creator may already hold an open placement intent for an unregistered
-name. Use a separate operator naming namespace, or coordinate mutations of
-creator-managed names with the creator's pass. `registeredClassOf` answers
-registration questions only.
+At the mutation receiver, refuse every serving name, current lane holder and
+member of `CreatorConfig.protectedNames`. Read `readPlacementClaim(creatorDb,
+name)` (available in v0.5.0) from the primary without caching. Refuse on read
+failure or a registered base or spare. A pending name belongs to the
+releaser, so refuse placement; explicit cleanup requires the class's release
+delay to have elapsed since `unregisteredAtMs`. Preserve storage the
+placement protocol does not own.
+
+A null result describes the registry and release queue when read. The
+creator may already hold an open placement intent for an unregistered name.
+Reconcile open work before an operator takes ownership of such a name.
+`registeredClassOf` answers registration questions only.
 
 ## Where the state lives
 
