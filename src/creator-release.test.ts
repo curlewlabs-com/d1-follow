@@ -3,7 +3,9 @@
 // creator-test-harness.ts sets up.
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { CreatorClass } from "./creator";
+import { addCandidateColo } from "./candidate-store";
 import { readReleasePending } from "./creator-store";
+import { LANE_HANDOFF_SETTLE_MS } from "./lane";
 import {
   CreatorWorld,
   DEN,
@@ -16,6 +18,8 @@ import {
   scriptedClass,
   type ScriptedClass,
 } from "./creator-test-harness";
+
+const MINUTE_MS = 60_000;
 
 let world: CreatorWorld;
 
@@ -34,8 +38,58 @@ describe("releasing", () => {
     await world.act();
     const cls = scriptedClass([ORD]);
     await outOfRegistry(cls);
+    world.clock += LANE_HANDOFF_SETTLE_MS;
+    await world.pass(cls);
     expect(cls.releasedNames).toEqual(["scheduler-old"]);
     expect(await readReleasePending(world.handle())).toEqual([]);
+  });
+
+  // A handoff that validated the object while it was registered can commit
+  // its swap after the pass unregistered it; releasing in that gap would clear
+  // the new holder's marker. So even a class with no delay of its own waits
+  // out the settle time, and a holder that landed meanwhile is kept.
+  test("waits out the handoff settle time, then keeps a holder that landed", async () => {
+    await world.act();
+    const cls = scriptedClass([ORD]);
+    await outOfRegistry(cls);
+    expect(cls.releasedNames).toEqual([]);
+    world.clock += LANE_HANDOFF_SETTLE_MS - 1;
+    await world.pass(cls);
+    expect(cls.releasedNames).not.toContain("scheduler-old");
+    world.app
+      .query(
+        "INSERT INTO follow_lane (lane, holder, seq, changed_at_ms, changed_by) VALUES (1, 'scheduler-old', 2, 0, 3)",
+      )
+      .run();
+    world.clock += 1;
+    await world.pass(cls);
+    expect(cls.releasedNames).not.toContain("scheduler-old");
+    expect(
+      (await readReleasePending(world.handle())).map((p) => p.name),
+    ).toEqual(["scheduler-old"]);
+  });
+
+  // The settle time runs from when the slot leaves the registry: a
+  // mark-in-place that took a while before it left must not have used it up
+  // while the slot was still registered and a handoff could still pick it.
+  test("starts the settle time when a slot leaves, after a slow mark", async () => {
+    await world.act();
+    await addCandidateColo(world.handle(), IAD, T0_MS - HOUR_MS);
+    await world.seed("scheduler-moved", MIA, T0_MS - HOUR_MS);
+    const cls = scriptedClass([ORD]);
+    cls.where.set("scheduler-moved", IAD);
+    const slow: CreatorClass = {
+      ...cls,
+      markInPlace: () => {
+        world.clock += MINUTE_MS;
+        return Promise.resolve({ colo: IAD, markedColo: null });
+      },
+    };
+    await world.pass(slow);
+    const pending = await readReleasePending(world.handle());
+    expect(
+      pending.find((p) => p.name === "scheduler-moved")?.unregisteredAtMs,
+    ).toBe(T0_MS + MINUTE_MS);
   });
 
   // A stateless class's callers may hold an old name in a cache, so its
@@ -45,6 +99,13 @@ describe("releasing", () => {
     const cls = { ...scriptedClass([ORD]), releaseAfterMs: 24 * HOUR_MS };
     await outOfRegistry(cls);
     expect(cls.releasedNames).toEqual([]);
+    // Past the settle time but short of the class's own, longer delay.
+    world.clock += 24 * HOUR_MS - 1;
+    await world.pass(cls);
+    expect(cls.releasedNames).not.toContain("scheduler-old");
+    world.clock += 1;
+    await world.pass(cls);
+    expect(cls.releasedNames).toContain("scheduler-old");
   });
 
   // The lane's holder and each deployment's default are never released,
@@ -65,6 +126,8 @@ describe("releasing", () => {
     const cls = scriptedClass([]);
     await world.seed("scheduler-old", ORD, T0_MS - HOUR_MS);
     cls.where.set("scheduler-old", IAD);
+    await world.pass(cls);
+    world.clock += LANE_HANDOFF_SETTLE_MS;
     const report = await world.pass(cls);
     expect(report.wouldRelease).toEqual(["scheduler-old"]);
     expect(cls.releasedNames).toEqual([]);
@@ -94,6 +157,9 @@ describe("release retries", () => {
       await world.seed(`scheduler-old-${n}`, colo, T0_MS - HOUR_MS);
       cls.where.set(`scheduler-old-${n}`, IAD);
     }
+    await world.pass(failing, { attemptsPerClassPerPass: 2 });
+    expect(calls).toBe(0);
+    world.clock += LANE_HANDOFF_SETTLE_MS;
     await world.pass(failing, { attemptsPerClassPerPass: 2 });
     expect(calls).toBe(2);
 

@@ -3,6 +3,7 @@
 // verified while it no longer holds its colo's marker is the failure these
 // guard: an older build that does not read the spare table can empty one, and
 // the emptied object still answers from its colo.
+import { LANE_HANDOFF_SETTLE_MS } from "./lane";
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { Colo } from "./colo";
 import { readReleasePending } from "./creator-store";
@@ -18,6 +19,8 @@ import {
   type ScriptedClass,
 } from "./creator-test-harness";
 import { readSpares, registerSpare, stampSpareVerified } from "./spare-store";
+
+const MINUTE_MS = 60_000;
 
 let world: CreatorWorld;
 let cls: ScriptedClass;
@@ -273,8 +276,32 @@ describe("keeping spares beside the primary", () => {
     expect(report.sparesUnregistered).toEqual([
       { classCode: SCHEDULER, name: "scheduler-spare", colo: ORD },
     ]);
-    // The scheduler class releases as soon as an object leaves its table.
-    expect(after.releasedNames).toEqual(["scheduler-spare"]);
+    // The scheduler class has no delay of its own, so the spare goes once the
+    // handoff settle time has passed.
+    expect(after.releasedNames).toEqual([]);
+    world.clock += LANE_HANDOFF_SETTLE_MS;
+    await world.pass(after);
+    expect(after.releasedNames).toContain("scheduler-spare");
+  });
+
+  // The settle time runs from when the spare leaves its table, not from when
+  // it was observed: a slow re-mark before it left must not have used it up.
+  test("starts the settle time when a spare leaves, after a slow re-mark", async () => {
+    await world.act();
+    await spare("scheduler-spare", ORD, T0_MS - HOUR_MS);
+    cls.where.set("scheduler-spare", ORD);
+    const slow = {
+      ...cls,
+      markInPlace: () => {
+        world.clock += MINUTE_MS;
+        return Promise.resolve({ colo: ORD, markedColo: null });
+      },
+    };
+    await world.pass(slow);
+    const pending = await readReleasePending(world.handle());
+    expect(
+      pending.find((p) => p.name === "scheduler-spare")?.unregisteredAtMs,
+    ).toBe(T0_MS + MINUTE_MS);
   });
 
   // A move and the old colo's base slot leaving in one pass: spares are kept

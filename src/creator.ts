@@ -34,6 +34,7 @@ import {
   type Slot,
   type SqlDatabase,
 } from "./creator-store";
+import { LANE_HANDOFF_SETTLE_MS } from "./lane";
 import { claimPass, releasePass, renewPass } from "./pass-lease";
 import { registerSpare, stampSpareVerified } from "./spare-store";
 import { readPrimary, type PrimaryPlacement } from "./primary-colo";
@@ -47,6 +48,8 @@ export interface CreatorClass {
   // How long an object stays out of the registry before it may be released:
   // a day for a stateless class, whose callers may still hold its name in a
   // cache, and none for a lane's class, whose callers follow the lane record.
+  // The creator never releases sooner than LANE_HANDOFF_SETTLE_MS (lane.ts),
+  // whatever this says.
   readonly releaseAfterMs: number;
   // The class's next number as the name of an object born through
   // `regionHint`, with a prefix no other class uses.
@@ -87,10 +90,10 @@ export interface CreatorClass {
   ) => Promise<ObserveResult>;
   // Has the object clear the storage the placement protocol owns, and only
   // that: storage the app keeps on the object for itself stays. Rejects when
-  // it refused or failed. For a class a lane can hand off to, the pass's
-  // holder check cannot see a handoff still committing, so the class's
-  // release delay must outlast any handoff the app can still commit, or the
-  // app must exclude handoffs through this call (README sec."Release").
+  // it refused or failed. The pass calls it no sooner than
+  // LANE_HANDOFF_SETTLE_MS after unregistering, so a handoff still committing
+  // lands before its holder check; one that can commit later than that needs
+  // the app to exclude handoffs through this call (README sec."Release").
   readonly release: (name: string, deadlineMs: number) => Promise<void>;
 }
 
@@ -133,7 +136,9 @@ export interface CreatorPassDeps {
   // The creator's own database (schema/creator.sql).
   readonly db: SqlDatabase;
   // The app's database, read only for where its primary is and for its lane
-  // tables (schema/lane.sql).
+  // tables (schema/lane.sql). Its lane reads must reach the primary uncached:
+  // the release step's holder check is what a handoff's settle time protects,
+  // and a replica could hide a swap that has already committed.
   readonly appDb: SqlDatabase;
   readonly config: CreatorConfig;
   readonly now: () => number;
@@ -790,7 +795,8 @@ async function runLeasedPass(
   for (const cls of config.classes) {
     const due = await readReleaseDue(db, {
       classCode: cls.code,
-      unregisteredByMs: passStartMs - cls.releaseAfterMs,
+      unregisteredByMs:
+        passStartMs - Math.max(cls.releaseAfterMs, LANE_HANDOFF_SETTLE_MS),
       keep: keepList,
       limit: config.attemptsPerClassPerPass,
     });

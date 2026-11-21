@@ -148,9 +148,12 @@ export async function observeSlots(pass: {
     // One that holds it may still have read the slot before a pass that lost
     // the lease stamped it, which the unregister itself checks.
     await pass.hold();
+    // Stamped when it leaves, not when it was observed: the release's settle
+    // time runs from here, and a slow mark-in-place above must not use it up
+    // while the slot was still registered.
     const left = await unregisterSlot(db, slot, {
       opId: pass.newOpId(),
-      atMs,
+      atMs: pass.now(),
       detail,
     });
     if (!left) {

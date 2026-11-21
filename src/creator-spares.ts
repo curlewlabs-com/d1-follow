@@ -158,9 +158,12 @@ export async function observeSpares(pass: {
         ? `no answer from ${spare.colo} since ${new Date(lastAnswerMs).toISOString()}`
         : unkept(spare, seen);
     await pass.hold();
+    // Stamped when it leaves, not when it was observed: the release's settle
+    // time runs from here, and a slow re-mark above must not use it up while
+    // the spare was still registered.
     const left = await unregisterSpare(db, spare, {
       opId: pass.newOpId(),
-      atMs,
+      atMs: pass.now(),
       detail,
     });
     if (!left) {
