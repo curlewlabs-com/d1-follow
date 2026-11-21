@@ -3,6 +3,7 @@
 // verified while it no longer holds its colo's marker is the failure these
 // guard: an older build that does not read the spare table can empty one, and
 // the emptied object still answers from its colo.
+import { LANE_HANDOFF_SETTLE_MS } from "./lane";
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { Colo } from "./colo";
 import { readReleasePending } from "./creator-store";
@@ -273,8 +274,12 @@ describe("keeping spares beside the primary", () => {
     expect(report.sparesUnregistered).toEqual([
       { classCode: SCHEDULER, name: "scheduler-spare", colo: ORD },
     ]);
-    // The scheduler class releases as soon as an object leaves its table.
-    expect(after.releasedNames).toEqual(["scheduler-spare"]);
+    // The scheduler class has no delay of its own, so the spare goes once the
+    // handoff settle time has passed.
+    expect(after.releasedNames).toEqual([]);
+    world.clock += LANE_HANDOFF_SETTLE_MS;
+    await world.pass(after);
+    expect(after.releasedNames).toContain("scheduler-spare");
   });
 
   // A move and the old colo's base slot leaving in one pass: spares are kept

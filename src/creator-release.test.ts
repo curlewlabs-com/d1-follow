@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { CreatorClass } from "./creator";
 import { readReleasePending } from "./creator-store";
+import { LANE_HANDOFF_SETTLE_MS } from "./lane";
 import {
   CreatorWorld,
   DEN,
@@ -34,8 +35,35 @@ describe("releasing", () => {
     await world.act();
     const cls = scriptedClass([ORD]);
     await outOfRegistry(cls);
+    world.clock += LANE_HANDOFF_SETTLE_MS;
+    await world.pass(cls);
     expect(cls.releasedNames).toEqual(["scheduler-old"]);
     expect(await readReleasePending(world.handle())).toEqual([]);
+  });
+
+  // A handoff that validated the object while it was registered can commit
+  // its swap after the pass unregistered it; releasing in that gap would clear
+  // the new holder's marker. So even a class with no delay of its own waits
+  // out the settle time, and a holder that landed meanwhile is kept.
+  test("waits out the handoff settle time, then keeps a holder that landed", async () => {
+    await world.act();
+    const cls = scriptedClass([ORD]);
+    await outOfRegistry(cls);
+    expect(cls.releasedNames).toEqual([]);
+    world.clock += LANE_HANDOFF_SETTLE_MS - 1;
+    await world.pass(cls);
+    expect(cls.releasedNames).not.toContain("scheduler-old");
+    world.app
+      .query(
+        "INSERT INTO follow_lane (lane, holder, seq, changed_at_ms, changed_by) VALUES (1, 'scheduler-old', 2, 0, 3)",
+      )
+      .run();
+    world.clock += 1;
+    await world.pass(cls);
+    expect(cls.releasedNames).not.toContain("scheduler-old");
+    expect(
+      (await readReleasePending(world.handle())).map((p) => p.name),
+    ).toEqual(["scheduler-old"]);
   });
 
   // A stateless class's callers may hold an old name in a cache, so its
@@ -65,6 +93,8 @@ describe("releasing", () => {
     const cls = scriptedClass([]);
     await world.seed("scheduler-old", ORD, T0_MS - HOUR_MS);
     cls.where.set("scheduler-old", IAD);
+    await world.pass(cls);
+    world.clock += LANE_HANDOFF_SETTLE_MS;
     const report = await world.pass(cls);
     expect(report.wouldRelease).toEqual(["scheduler-old"]);
     expect(cls.releasedNames).toEqual([]);
@@ -94,6 +124,9 @@ describe("release retries", () => {
       await world.seed(`scheduler-old-${n}`, colo, T0_MS - HOUR_MS);
       cls.where.set(`scheduler-old-${n}`, IAD);
     }
+    await world.pass(failing, { attemptsPerClassPerPass: 2 });
+    expect(calls).toBe(0);
+    world.clock += LANE_HANDOFF_SETTLE_MS;
     await world.pass(failing, { attemptsPerClassPerPass: 2 });
     expect(calls).toBe(2);
 

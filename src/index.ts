@@ -111,6 +111,7 @@ export {
   handoffColo,
   LANE_CHANGED_BY,
   LANE_HANDOFF_THRESHOLD,
+  LANE_HANDOFF_SETTLE_MS,
   LANE_RUN_MAX_GAP_MS,
   nextLaneRun,
   NO_RUN,

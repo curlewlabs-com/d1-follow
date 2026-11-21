@@ -198,8 +198,13 @@ describe("the pass lease", () => {
   // that no longer holds the lease.
   test("each call that acts carries a deadline inside the pass's lease", async () => {
     await world.act();
-    // One slot that moved into a candidate colo (marked in place), one that
-    // moved out of every candidate (released), and a gap probed (placed).
+    // One slot that moved into a candidate colo (marked in place), one long out
+    // of the registry (released), and a gap probed (placed).
+    world.creator
+      .query(
+        "INSERT INTO follow_release_pending (name, class_code, object_id, unregistered_at_ms) VALUES (?, ?, ?, ?)",
+      )
+      .run("scheduler-gone", SCHEDULER, "id-gone", T0_MS - 2 * HOUR_MS);
     await world.seed("scheduler-moved", MIA, T0_MS - HOUR_MS);
     await world.seed("scheduler-old", DEN, T0_MS - 2 * HOUR_MS);
     await addCandidateColo(world.handle(), IAD, T0_MS - HOUR_MS);

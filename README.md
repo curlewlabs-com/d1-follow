@@ -69,7 +69,7 @@ ships TypeScript source, so it needs a bundler or test runner that compiles
 TypeScript, as Wrangler and `@cloudflare/vitest-plugin` do:
 
 ```sh
-bun add https://github.com/curlewlabs-com/d1-follow/releases/download/v0.5.0/curlewlabs-com-d1-follow-0.5.0.tgz
+bun add https://github.com/curlewlabs-com/d1-follow/releases/download/v0.5.1/curlewlabs-com-d1-follow-0.5.1.tgz
 ```
 
 The lockfile records the tarball's integrity, and each release is immutable.
@@ -360,11 +360,13 @@ invocations that overlap never fill the same gap twice:
   lane's holder, is not the deployment default, and, for a stateless class, has
   been out of the registry for a day. A release that fails is retried on later
   passes, no more per class per pass than the attempts bound, least recently
-  attempted first, so releases that keep failing never hold back the rest. The
-  holder check is a read, so for a class a lane can hand off to, a handoff that
-  validated the slot while it was registered can still commit after it; the
-  release is safe only while the class's release delay outlasts any handoff your
-  app can still commit, or your app excludes handoffs through the release.
+  attempted first, so releases that keep failing never hold back the rest.
+  Whatever the class's own delay, a slot waits at least `LANE_HANDOFF_SETTLE_MS`
+  (`src/lane.ts`) out of the registry: a handoff that validated it while it was
+  registered commits its swap as a separate write, which can land after the pass
+  unregistered it, and waiting lets that write land before the release's holder
+  check reads the lane. An app whose handoff can commit later than that excludes
+  handoffs through the release.
 
 A pass renews its lease before each step that acts, and checks it again after
 every call that acts on an object (a creation, a placement, a release, or the
