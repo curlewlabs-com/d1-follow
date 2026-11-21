@@ -154,8 +154,8 @@ The place, mark-in-place and release calls each receive a `deadlineMs`, and each
 must refuse once the object's own clock reads past it, before it touches
 storage. The deadline ends inside the creator's pass lease. A call that arrives
 later belongs to a pass that may no longer hold the lease, and acting on it
-could undo the work of the pass that does. Placement and release also enforce the
-[placement guard](#guard-placement-and-release) at the object.
+could undo the work of the pass that does. Placement and release also enforce
+the [placement guard](#guard-placement-and-release) at the object.
 
 The design below says what each of those calls must do. The test that a feature
 belongs in this package is whether it stays useful with your app swapped for
@@ -417,8 +417,8 @@ Cloudflare in that colo.
 
 Built: the table, the identity table beside it and the store's statements for
 registering, verifying, unregistering and promoting a spare
-(`src/spare-store.ts`); the [placement guard](#guard-placement-and-release), whose claim lookup covers
-spares; the census, which counts them
+(`src/spare-store.ts`); the [placement guard](#guard-placement-and-release),
+whose claim lookup covers spares; the census, which counts them
 (`src/census.ts`); and the creator's pass, which keeps each class's spares in
 the primary's colo, verifies them by their marker, marks one again where it is
 when it answers there without it, takes them out when the primary moves,
@@ -456,16 +456,16 @@ below.
   batch, with its ledger record, so the colo keeps a base slot with no creation.
 - **Who reads the new table.** Every reader whose job is to protect or account
   for slots: the [placement guard](#guard-placement-and-release), which protects
-  spares through release; the creator's pass, which observes and releases spares as it
-  does base slots, and verifies one only while it answers from its colo holding
-  the marker placed for that colo; the census; and, once a spare can serve as
-  the failover standby, the placement audit. An app's failover reads it too,
-  since its standby is a verified spare beside the primary. A lane's handoff
-  reads it, because the object a lane must leave can be the colo's base slot: an
-  object Cloudflare moved keeps its row until the creator's next pass, and a
-  lane that stopped at that row would wait for the pass beside a verified spare.
-  A forward keeps reading the base slots alone: a stale row costs it a request
-  served no closer, which the next pass mends.
+  spares through release; the creator's pass, which observes and releases spares
+  as it does base slots, and verifies one only while it answers from its colo
+  holding the marker placed for that colo; the census; and, once a spare can
+  serve as the failover standby, the placement audit. An app's failover reads it
+  too, since its standby is a verified spare beside the primary. A lane's
+  handoff reads it, because the object a lane must leave can be the colo's base
+  slot: an object Cloudflare moved keeps its row until the creator's next pass,
+  and a lane that stopped at that row would wait for the pass beside a verified
+  spare. A forward keeps reading the base slots alone: a stale row costs it a
+  request served no closer, which the next pass mends.
 - **The order, and what a rollback does.** The store's reads of the new table,
   and each reader above, deploy first, while the table is empty and nothing
   changes. Only then does the creator register a spare. A Worker rolled back to
@@ -511,12 +511,13 @@ before addressing it and before dispatch at the receiver, allowing for clock
 skew. The spare's last verification anchors its release bound because a creator
 can decide to unregister before the registry write becomes visible. A release
 delay must outlast outstanding answers, including through restores and
-configuration changes. Apply the [placement guard](#guard-placement-and-release).
-During a restore, stop issuance, drain outstanding
-answers and reverify restored markers before resuming. This lookup does not make
-a timed-out write safe to retry. An abandonable attempt must return a target
-that starts route work only when its caller selects it. Once execution has been
-sent, losing its result cannot authorize another execution.
+configuration changes. Apply the
+[placement guard](#guard-placement-and-release). During a restore, stop
+issuance, drain outstanding answers and reverify restored markers before
+resuming. This lookup does not make a timed-out write safe to retry. An
+abandonable attempt must return a target that starts route work only when its
+caller selects it. Once execution has been sent, losing its result cannot
+authorize another execution.
 
 **Measuring the accept window.** In an adopting deployment, each side recorded
 its own elapsed time, joined offline by a per-attempt ID. Subtracting the
@@ -534,32 +535,33 @@ cold start and execution before the caller gives up.
 
 ### Guard placement and release
 
-Use fresh names in a separate namespace for operator placement. Before manual
-cleanup of a creator-managed name, prevent new creator passes and confirm
-every active pass has stopped. A holder can renew an expired lease until
-another holder takes it. After the passes stop, let all outstanding mutation
-calls finish or reach their receiver deadlines before reading claims. Keep
-new passes fenced through the storage mutation.
+`readPlacementClaim(creatorDb, name)` (available in v0.5.0) reports the
+creator's claim on a name in one read of its registry and release queue:
+`registered` with its class for a base slot or spare, `pending_release` with its
+class and `unregisteredAtMs` for a name the creator has unregistered and not yet
+released, or `null` for neither. It throws on conflicting claims.
+`registeredClassOf` answers only whether a name is registered now, so a mutation
+receiver uses `readPlacementClaim` instead.
 
-For an object eligible to hold a lane, the application must serialize both
-scheduled and manual cleanup with handoffs to that object. Prevent new
-handoffs and drain in-flight ones before checking the holder; retain that
-exclusion through the mutation. A handoff may already have validated the
-target and still be able to assign it. Defer cleanup if the application
-cannot establish exclusion.
+A placement or release receiver that enforces the guard reads the claim from the
+primary, uncached, when the call arrives, and refuses:
 
-At the mutation receiver, refuse every serving name, current lane holder and
-member of `CreatorConfig.protectedNames`. Read `readPlacementClaim(creatorDb,
-name)` (available in v0.5.0) from the primary without caching. Refuse on read
-failure or a registered base or spare. A pending name belongs to the
-releaser, so refuse placement; explicit cleanup requires the class's release
-delay to have elapsed since `unregisteredAtMs`. Preserve storage the
-placement protocol does not own.
+- any failure to read it;
+- a `registered` name;
+- placement of a `pending_release` name, which still belongs to the releaser;
+- release of a `pending_release` name before the class's release delay has
+  passed since `unregisteredAtMs`.
 
-A null result describes the registry and release queue when read. The
-creator may already hold an open placement intent for an unregistered name.
-Reconcile open work before an operator takes ownership of such a name.
-`registeredClassOf` answers registration questions only.
+It also refuses your serving names, a lane's current holder and each name in
+`CreatorConfig.protectedNames`, none of which the creator's tables record, and
+leaves untouched any storage the placement protocol does not own.
+
+A `null` claim describes the registry and release queue at the moment of the
+read and nothing more. The guard cannot see a creator pass or lane handoff
+already in flight, an open placement intent, or a standby answer already issued,
+so it does not make cleanup of a creator-managed name safe on its own. An
+application that cleans up such names outside the creator owns the exclusion
+that makes it safe.
 
 ## Where the state lives
 
@@ -579,7 +581,8 @@ The tool's state is split by who reads it on a hot path:
   in the background, cached, at most once every ten minutes. A lane reads them
   only when its run reaches the threshold. The creator and the audit read them
   on their own schedules. The app binds the creator's database for those reads.
-  Its mutation receivers enforce the [placement guard](#guard-placement-and-release).
+  Its mutation receivers enforce the
+  [placement guard](#guard-placement-and-release).
 
 The creator copies each lane change from the change log into the ledger on its
 next pass, so the ledger stays the one account of every move. Keeping the
