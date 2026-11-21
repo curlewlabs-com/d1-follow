@@ -360,7 +360,11 @@ invocations that overlap never fill the same gap twice:
   lane's holder, is not the deployment default, and, for a stateless class, has
   been out of the registry for a day. A release that fails is retried on later
   passes, no more per class per pass than the attempts bound, least recently
-  attempted first, so releases that keep failing never hold back the rest.
+  attempted first, so releases that keep failing never hold back the rest. The
+  holder check is a read, so for a class a lane can hand off to, a handoff that
+  validated the slot while it was registered can still commit after it; the
+  release is safe only while the class's release delay outlasts any handoff your
+  app can still commit, or your app excludes handoffs through the release.
 
 A pass renews its lease before each step that acts, and checks it again after
 every call that acts on an object (a creation, a placement, a release, or the

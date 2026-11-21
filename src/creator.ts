@@ -87,7 +87,10 @@ export interface CreatorClass {
   ) => Promise<ObserveResult>;
   // Has the object clear the storage the placement protocol owns, and only
   // that: storage the app keeps on the object for itself stays. Rejects when
-  // it refused or failed.
+  // it refused or failed. For a class a lane can hand off to, the pass's
+  // holder check cannot see a handoff still committing, so the class's
+  // release delay must outlast any handoff the app can still commit, or the
+  // app must exclude handoffs through this call (README sec."Release").
   readonly release: (name: string, deadlineMs: number) => Promise<void>;
 }
 
