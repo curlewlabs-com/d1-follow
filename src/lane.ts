@@ -67,8 +67,12 @@ export const LANE_RUN_MAX_GAP_MS = 2 * 60 * 60 * 1000;
 // separate write, which can land after the caller stopped waiting for it; a
 // release decided in between would see the old holder and clear the new one's
 // marker. Waiting this long after unregistering lets any such handoff land
-// first, so the release's holder check sees it. An app whose handoff can still
-// commit later than this excludes handoffs through the release itself.
+// first, so the release's holder check sees it. The window is timed from the
+// unregister's stamp, written again once the pass sees the unregister commit;
+// a pass that never sees it keeps the stamp sampled just before the commit, so
+// the bound an app's handoff must meet is this less the unregister batch's own
+// commit time. An app whose handoff can still commit later than that excludes
+// handoffs through the release itself.
 export const LANE_HANDOFF_SETTLE_MS = 15 * 60 * 1000;
 
 // The run after this unit of work's placement. A unit that observed nothing
