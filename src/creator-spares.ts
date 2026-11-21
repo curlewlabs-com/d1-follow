@@ -7,7 +7,11 @@
 // only its missing marker says it is no longer held ready.
 import type { Colo } from "./colo";
 import type { CreatorClass, ObserveResult, ReportedObject } from "./creator";
-import type { Slot, SqlDatabase } from "./creator-store";
+import {
+  restampReleasePending,
+  type Slot,
+  type SqlDatabase,
+} from "./creator-store";
 import {
   promoteSpare,
   readSpares,
@@ -173,6 +177,7 @@ export async function observeSpares(pass: {
       kept.push(spare);
       continue;
     }
+    await restampReleasePending(db, spare.name, pass.now());
     unregistered.push({
       classCode: spare.classCode,
       name: spare.name,
@@ -245,6 +250,7 @@ export async function settleSpares(pass: {
       lingering.push(spare);
       return;
     }
+    await restampReleasePending(db, spare.name, pass.now());
     unregistered.push({
       classCode: spare.classCode,
       name: spare.name,

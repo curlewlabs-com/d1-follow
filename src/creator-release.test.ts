@@ -92,6 +92,35 @@ describe("releasing", () => {
     ).toBe(T0_MS + MINUTE_MS);
   });
 
+  // The unregister writes the time it sampled before its batch ran. A batch
+  // that took a while to commit must not take that time out of the settle
+  // window: a handoff that validated the slot during it still has to land.
+  test("restamps a release's time after the unregister commits", async () => {
+    await world.act();
+    const cls = scriptedClass([ORD]);
+    await world.seed("scheduler-old", ORD, T0_MS - HOUR_MS);
+    cls.where.set("scheduler-old", IAD);
+    let committedAtMs: number | null = null;
+    world.afterBatch = () => {
+      const queued = world.creator
+        .query(
+          "SELECT 1 FROM follow_release_pending WHERE name = 'scheduler-old'",
+        )
+        .get();
+      if (queued !== null && committedAtMs === null) {
+        world.clock += MINUTE_MS;
+        committedAtMs = world.clock;
+      }
+    };
+    await world.pass(cls);
+    world.afterBatch = undefined;
+    const pending = await readReleasePending(world.handle());
+    expect(
+      pending.find((p) => p.name === "scheduler-old")?.unregisteredAtMs,
+    ).toBe(committedAtMs ?? -1);
+    expect(committedAtMs).not.toBeNull();
+  });
+
   // A stateless class's callers may hold an old name in a cache, so its
   // objects wait out the class's window before they are emptied.
   test("holds a release until the class's window has passed", async () => {

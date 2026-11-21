@@ -112,6 +112,8 @@ export const CREATOR_SQL = {
   stampReleaseAttempt:
     "UPDATE follow_release_pending SET attempted_at_ms = ? WHERE name = ?",
   dropReleasePending: "DELETE FROM follow_release_pending WHERE name = ?",
+  restampReleasePending:
+    "UPDATE follow_release_pending SET unregistered_at_ms = max(unregistered_at_ms, ?) WHERE name = ?",
   readBackoff:
     "SELECT class_code, wait_ms, next_attempt_at_ms FROM follow_backoff",
   setBackoff:
@@ -734,6 +736,19 @@ export async function beginRelease(
       .prepare(CREATOR_SQL.stampReleaseAttempt)
       .bind(release.atMs, release.name),
   ]);
+}
+
+// Moves a pending release's time to `atMs`, read after the unregister that
+// queued it has committed, never earlier than it was. The unregister writes
+// the time it sampled before its batch ran, and the settle time a release
+// waits out has to run from when the object had certainly left, so a handoff
+// that validated it during that batch still lands first.
+export async function restampReleasePending(
+  db: SqlDatabase,
+  name: string,
+  atMs: number,
+): Promise<void> {
+  await db.prepare(CREATOR_SQL.restampReleasePending).bind(atMs, name).run();
 }
 
 // A release's outcome, with the object leaving the pending set in one batch.
