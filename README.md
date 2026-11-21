@@ -555,9 +555,11 @@ primary, uncached, when the call arrives, and refuses:
 - release of a `pending_release` name before the class's release delay has
   passed since `unregisteredAtMs`.
 
-It also refuses your serving names, a lane's current holder and each name in
-`CreatorConfig.protectedNames`, none of which the creator's tables record, and
-leaves untouched any storage the placement protocol does not own.
+It also refuses your serving names and a lane's current holder, which the
+creator's tables do not record, and leaves untouched any storage the placement
+protocol does not own. `CreatorConfig.protectedNames` scopes only what the
+creator's own passes release; it is not a receiver rule, so an app can still
+retire such a name deliberately.
 
 A `null` claim describes the registry and release queue at the moment of the
 read and nothing more. The guard cannot see a creator pass or lane handoff

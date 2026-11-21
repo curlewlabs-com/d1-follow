@@ -85,7 +85,9 @@ export interface CreatorClass {
     name: string,
     deadlineMs: number,
   ) => Promise<ObserveResult>;
-  // Has the object empty its storage. Rejects when it refused or failed.
+  // Has the object clear the storage the placement protocol owns, and only
+  // that: storage the app keeps on the object for itself stays. Rejects when
+  // it refused or failed.
   readonly release: (name: string, deadlineMs: number) => Promise<void>;
 }
 
@@ -114,8 +116,10 @@ export interface CreatorConfig {
   // A slot or a spare stays registered while its last verification is younger
   // than this; one that cannot answer for longer leaves its table.
   readonly verifiedMaxAgeMs: number;
-  // Names the app must never have released whatever the registry says, such
-  // as each deployment's default holder.
+  // Names the creator's own passes never release, whatever the registry says,
+  // such as each deployment's default holder. It scopes the creator's
+  // automatic actions only; whether an operator may retire one is the app's
+  // call at its own receivers.
   readonly protectedNames: ReadonlySet<string>;
   // The app's lanes, whose change logs are copied into the ledger and whose
   // holders are never released.
