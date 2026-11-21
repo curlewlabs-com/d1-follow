@@ -545,10 +545,20 @@ isolate that had run nothing else from calls on a warmed isolate. Full cold
 starts had a median of 144 ms and p99 of 505 ms, with 0.40% exceeding 1,500 ms.
 Later calls had a median residual of 64 ms. Some original calls started 2.361 to
 8.694 seconds after their caller's 10-second timeout. This proxy includes
-returning the result. Measure direct time to the prepare target and count calls
-that never return one before choosing a window for a deployment. The shortest
-client wait must accommodate the accept window, discovery, and the standby's
-cold start and execution before the caller gives up.
+returning the result, so the deployment then timed the accept directly, on its
+eager accept call, which starts the handler as it returns the target: from the
+call's send to the target's arrival, on the caller's clock alone. Over one
+complete day it was 56 ms at the median and 715 ms at p99.9, with 0.07% of calls
+above 1,500 ms and none of the calls it recorded left without an accept or timed
+out. A 1,500 ms window clears that body by a wide margin. That reading is not a
+prepared call's. The eager call starts dispatch before it returns its target. A
+prepared call checks its deadline, returns its target, and starts dispatch only
+when the caller invokes `result()`. Both invoke `result()`, but preparation puts
+that trip on the handler's critical path, out of the time the window leaves for
+execution. So take the direct reading on the prepared call itself, and count the
+calls that never return a target, before choosing a deployment's window. The
+shortest client wait must accommodate the accept window, discovery, and the
+standby's cold start and execution before the caller gives up.
 
 ### Guard placement and release
 
