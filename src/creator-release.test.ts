@@ -3,6 +3,7 @@
 // creator-test-harness.ts sets up.
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { CreatorClass } from "./creator";
+import { addCandidateColo } from "./candidate-store";
 import { readReleasePending } from "./creator-store";
 import { LANE_HANDOFF_SETTLE_MS } from "./lane";
 import {
@@ -17,6 +18,8 @@ import {
   scriptedClass,
   type ScriptedClass,
 } from "./creator-test-harness";
+
+const MINUTE_MS = 60_000;
 
 let world: CreatorWorld;
 
@@ -66,6 +69,29 @@ describe("releasing", () => {
     ).toEqual(["scheduler-old"]);
   });
 
+  // The settle time runs from when the slot leaves the registry: a
+  // mark-in-place that took a while before it left must not have used it up
+  // while the slot was still registered and a handoff could still pick it.
+  test("starts the settle time when a slot leaves, after a slow mark", async () => {
+    await world.act();
+    await addCandidateColo(world.handle(), IAD, T0_MS - HOUR_MS);
+    await world.seed("scheduler-moved", MIA, T0_MS - HOUR_MS);
+    const cls = scriptedClass([ORD]);
+    cls.where.set("scheduler-moved", IAD);
+    const slow: CreatorClass = {
+      ...cls,
+      markInPlace: () => {
+        world.clock += MINUTE_MS;
+        return Promise.resolve({ colo: IAD, markedColo: null });
+      },
+    };
+    await world.pass(slow);
+    const pending = await readReleasePending(world.handle());
+    expect(
+      pending.find((p) => p.name === "scheduler-moved")?.unregisteredAtMs,
+    ).toBe(T0_MS + MINUTE_MS);
+  });
+
   // A stateless class's callers may hold an old name in a cache, so its
   // objects wait out the class's window before they are emptied.
   test("holds a release until the class's window has passed", async () => {
@@ -73,6 +99,13 @@ describe("releasing", () => {
     const cls = { ...scriptedClass([ORD]), releaseAfterMs: 24 * HOUR_MS };
     await outOfRegistry(cls);
     expect(cls.releasedNames).toEqual([]);
+    // Past the settle time but short of the class's own, longer delay.
+    world.clock += 24 * HOUR_MS - 1;
+    await world.pass(cls);
+    expect(cls.releasedNames).not.toContain("scheduler-old");
+    world.clock += 1;
+    await world.pass(cls);
+    expect(cls.releasedNames).toContain("scheduler-old");
   });
 
   // The lane's holder and each deployment's default are never released,

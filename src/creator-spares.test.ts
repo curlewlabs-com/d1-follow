@@ -20,6 +20,8 @@ import {
 } from "./creator-test-harness";
 import { readSpares, registerSpare, stampSpareVerified } from "./spare-store";
 
+const MINUTE_MS = 60_000;
+
 let world: CreatorWorld;
 let cls: ScriptedClass;
 
@@ -280,6 +282,26 @@ describe("keeping spares beside the primary", () => {
     world.clock += LANE_HANDOFF_SETTLE_MS;
     await world.pass(after);
     expect(after.releasedNames).toContain("scheduler-spare");
+  });
+
+  // The settle time runs from when the spare leaves its table, not from when
+  // it was observed: a slow re-mark before it left must not have used it up.
+  test("starts the settle time when a spare leaves, after a slow re-mark", async () => {
+    await world.act();
+    await spare("scheduler-spare", ORD, T0_MS - HOUR_MS);
+    cls.where.set("scheduler-spare", ORD);
+    const slow = {
+      ...cls,
+      markInPlace: () => {
+        world.clock += MINUTE_MS;
+        return Promise.resolve({ colo: ORD, markedColo: null });
+      },
+    };
+    await world.pass(slow);
+    const pending = await readReleasePending(world.handle());
+    expect(
+      pending.find((p) => p.name === "scheduler-spare")?.unregisteredAtMs,
+    ).toBe(T0_MS + MINUTE_MS);
   });
 
   // A move and the old colo's base slot leaving in one pass: spares are kept
