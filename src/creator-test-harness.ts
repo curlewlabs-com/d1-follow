@@ -38,6 +38,7 @@ function sqliteHandle(
   sqlite: Database,
   onRead?: ReadObserver,
   metaOf?: MetaOf,
+  afterBatch?: () => void,
 ): SqlDatabase {
   const statement = (
     query: string,
@@ -61,13 +62,13 @@ function sqliteHandle(
     prepare: (query) => statement(query, []),
     batch: (statements) =>
       new Promise((resolve) => {
-        resolve(
-          sqlite.transaction(() =>
-            statements.map((s) => ({
-              results: (s as ReturnType<typeof statement>).rows(),
-            })),
-          )(),
-        );
+        const results = sqlite.transaction(() =>
+          statements.map((s) => ({
+            results: (s as ReturnType<typeof statement>).rows(),
+          })),
+        )();
+        afterBatch?.();
+        resolve(results);
       }),
   };
 }
@@ -195,8 +196,14 @@ export class CreatorWorld {
     );
   }
 
+  // Runs after each committed batch on the creator database, so a test can
+  // move the clock between a batch's commit and whatever reads it next.
+  afterBatch: (() => void) | undefined = undefined;
+
   handle(onRead?: ReadObserver): SqlDatabase {
-    return sqliteHandle(this.creator, onRead);
+    return sqliteHandle(this.creator, onRead, undefined, () =>
+      this.afterBatch?.(),
+    );
   }
 
   async pass(

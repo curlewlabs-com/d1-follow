@@ -362,16 +362,19 @@ invocations that overlap never fill the same gap twice:
   passes, no more per class per pass than the attempts bound, least recently
   attempted first, so releases that keep failing never hold back the rest.
   Whatever the class's own delay, a slot waits at least `LANE_HANDOFF_SETTLE_MS`
-  (`src/lane.ts`) out of the registry: a handoff that validated it while it was
-  registered commits its swap as a separate write, which can land after the pass
-  unregistered it, and waiting lets that write land before the release's holder
-  check reads the lane. That order holds only when each side reads the primary:
-  the handoff's last check of its target, automatic or operator, and the pass's
-  read of the lane holders (`CreatorPassDeps.appDb`), each uncached, since a
-  replica can still show a slot that left the registry or hide a swap that has
-  committed. The bound runs to the swap's commit, including a write that
-  outlives its caller's timeout; an app whose handoff can commit later than that
-  excludes handoffs through the release.
+  (`src/lane.ts`) out of the registry, timed from after its unregister has
+  committed: a handoff that validated it while it was registered commits its
+  swap as a separate write, which can land after the pass unregistered it, and
+  waiting lets that write land before the release's holder check reads the lane.
+  That order holds only when each side reads the primary: the handoff's last
+  check of its target, automatic or operator, and the pass's read of the lane
+  holders (`CreatorPassDeps.appDb`), each uncached, since a replica can still
+  show a slot that left the registry or hide a swap that has committed. The
+  bound runs to the swap's commit, including a write that outlives its caller's
+  timeout, and is measured from the unregister's stamp: if a pass never sees its
+  unregister commit, the stamp stays the one sampled just before it, so the
+  bound is the settle time less that batch's own commit time; an app whose
+  handoff can commit later than that excludes handoffs through the release.
 
 A pass renews its lease before each step that acts, and checks it again after
 every call that acts on an object (a creation, a placement, a release, or the

@@ -7,6 +7,7 @@ import type { Colo } from "./colo";
 import type { CreatorClass, ObserveResult, ReportedObject } from "./creator";
 import {
   moveSlot,
+  restampReleasePending,
   stampVerified,
   unregisterSlot,
   type Slot,
@@ -162,6 +163,7 @@ export async function observeSlots(pass: {
       );
       continue;
     }
+    await restampReleasePending(db, slot.name, pass.now());
     registry.delete(slot.name);
     unregistered.push({
       classCode: slot.classCode,
