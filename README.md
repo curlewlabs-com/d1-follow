@@ -371,10 +371,11 @@ invocations that overlap never fill the same gap twice:
   holders (`CreatorPassDeps.appDb`), each uncached, since a replica can still
   show a slot that left the registry or hide a swap that has committed. The
   bound runs to the swap's commit, including a write that outlives its caller's
-  timeout, and is measured from the unregister's stamp: if a pass never sees its
-  unregister commit, the stamp stays the one sampled just before it, so the
-  bound is the settle time less that batch's own commit time; an app whose
-  handoff can commit later than that excludes handoffs through the release.
+  timeout, and is measured from when the creator saw the unregister commit: a
+  pending release is queued unstamped, never due, and stamped by the pass that
+  sees its unregister commit or, if that pass never did, by the next pass that
+  finds it; an app whose handoff can commit later than that excludes handoffs
+  through the release.
 
 A pass renews its lease before each step that acts, and checks it again after
 every call that acts on an object (a creation, a placement, a release, or the
@@ -556,7 +557,9 @@ cold start and execution before the caller gives up.
 creator's claim on a name in one read of its registry and release queue:
 `registered` with its class for a base slot or spare, `pending_release` with its
 class and `unregisteredAtMs` for a name the creator has unregistered and not yet
-released, or `null` for neither. It throws on conflicting claims.
+released (`PENDING_RELEASE_UNSTAMPED_MS`, the largest safe integer, until the
+creator has seen that unregister commit, which a hold check measured from it
+refuses), or `null` for neither. It throws on conflicting claims.
 `registeredClassOf` answers only whether a name is registered now, so a mutation
 receiver uses `readPlacementClaim` instead.
 

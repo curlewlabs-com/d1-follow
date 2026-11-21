@@ -112,8 +112,8 @@ export const CREATOR_SQL = {
   stampReleaseAttempt:
     "UPDATE follow_release_pending SET attempted_at_ms = ? WHERE name = ?",
   dropReleasePending: "DELETE FROM follow_release_pending WHERE name = ?",
-  restampReleasePending:
-    "UPDATE follow_release_pending SET unregistered_at_ms = max(unregistered_at_ms, ?) WHERE name = ?",
+  restampReleasePending: `UPDATE follow_release_pending SET unregistered_at_ms = ? WHERE name = ? AND unregistered_at_ms = ${String(Number.MAX_SAFE_INTEGER)}`,
+  stampUnstampedReleases: `UPDATE follow_release_pending SET unregistered_at_ms = ? WHERE unregistered_at_ms = ${String(Number.MAX_SAFE_INTEGER)}`,
   readBackoff:
     "SELECT class_code, wait_ms, next_attempt_at_ms FROM follow_backoff",
   setBackoff:
@@ -436,15 +436,12 @@ export async function unregisterSlot(
         slot.name,
         slot.verifiedAtMs,
       ),
-    // A base can be a promoted spare with an outstanding standby answer. A
-    // backward clock must preserve its release hold from verification.
+    // Queued unstamped: never due, and a hold check reads it as inside its
+    // hold, until restampReleasePending records when the unregister was seen
+    // to commit (PENDING_RELEASE_UNSTAMPED_MS says why).
     db
       .prepare(CREATOR_SQL.holdForRelease)
-      .bind(
-        Math.max(record.atMs, slot.verifiedAtMs ?? record.atMs),
-        slot.name,
-        slot.verifiedAtMs,
-      ),
+      .bind(PENDING_RELEASE_UNSTAMPED_MS, slot.name, slot.verifiedAtMs),
     releaseIdentity(db, "base", slot),
     db.prepare(CREATOR_SQL.deleteSlot).bind(slot.name, slot.verifiedAtMs),
   ]);
@@ -738,17 +735,33 @@ export async function beginRelease(
   ]);
 }
 
-// Moves a pending release's time to `atMs`, read after the unregister that
-// queued it has committed, never earlier than it was. The unregister writes
-// the time it sampled before its batch ran, and the settle time a release
-// waits out has to run from when the object had certainly left, so a handoff
-// that validated it during that batch still lands first.
+// The time a pending release carries from its unregister until the creator
+// has seen that unregister commit. A release's settle time has to run from
+// when the object had certainly left the registry, and a time sampled inside
+// the unregister's own batch is earlier than that, so the row starts with
+// none: never due for release, and read by a receiver's hold check as inside
+// its hold. A pass that sees its unregister commit stamps it at once; one that
+// finds a row still unstamped, because the reply or the stamp was lost,
+// stamps it when it finds it.
+export const PENDING_RELEASE_UNSTAMPED_MS = Number.MAX_SAFE_INTEGER;
+
+// Stamps a pending release the caller has just seen its unregister commit,
+// with `atMs` read after that commit. A row already stamped keeps its time.
 export async function restampReleasePending(
   db: SqlDatabase,
   name: string,
   atMs: number,
 ): Promise<void> {
   await db.prepare(CREATOR_SQL.restampReleasePending).bind(atMs, name).run();
+}
+
+// Stamps every pending release still unstamped with `atMs`, the time the pass
+// read them: the row's presence is the proof its unregister committed.
+export async function stampUnstampedReleases(
+  db: SqlDatabase,
+  atMs: number,
+): Promise<void> {
+  await db.prepare(CREATOR_SQL.stampUnstampedReleases).bind(atMs).run();
 }
 
 // A release's outcome, with the object leaving the pending set in one batch.

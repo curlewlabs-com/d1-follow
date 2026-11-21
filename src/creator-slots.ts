@@ -163,7 +163,12 @@ export async function observeSlots(pass: {
       );
       continue;
     }
-    await restampReleasePending(db, slot.name, pass.now());
+    // A clock correction cannot let release outrun an issued standby answer.
+    await restampReleasePending(
+      db,
+      slot.name,
+      Math.max(pass.now(), slot.verifiedAtMs ?? 0),
+    );
     registry.delete(slot.name);
     unregistered.push({
       classCode: slot.classCode,

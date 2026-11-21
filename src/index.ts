@@ -48,6 +48,7 @@ export {
   readReleasePending,
   readSlots,
   recordLaneChange,
+  PENDING_RELEASE_UNSTAMPED_MS,
   recordReleased,
   recordSpentName,
   registerSlot,

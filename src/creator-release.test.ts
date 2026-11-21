@@ -4,7 +4,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { CreatorClass } from "./creator";
 import { addCandidateColo } from "./candidate-store";
-import { readReleasePending } from "./creator-store";
+import { readReleasePending, unregisterSlot } from "./creator-store";
 import { LANE_HANDOFF_SETTLE_MS } from "./lane";
 import {
   CreatorWorld,
@@ -119,6 +119,38 @@ describe("releasing", () => {
       pending.find((p) => p.name === "scheduler-old")?.unregisteredAtMs,
     ).toBe(committedAtMs ?? -1);
     expect(committedAtMs).not.toBeNull();
+  });
+
+  // An unregister that committed while the pass never saw it (its reply or its
+  // stamp was lost, or the lease moved on) leaves the row unstamped. It must
+  // not release on a time sampled inside the batch: a later pass stamps it
+  // when it finds it, and the settle time runs from there.
+  test("stamps an interrupted unregister when a later pass finds it", async () => {
+    await world.act();
+    const cls = scriptedClass([ORD]);
+    await world.seed("scheduler-old", ORD, T0_MS - HOUR_MS);
+    await unregisterSlot(
+      world.handle(),
+      { name: "scheduler-old", verifiedAtMs: T0_MS - HOUR_MS },
+      {
+        opId: "lost",
+        atMs: T0_MS - 2 * LANE_HANDOFF_SETTLE_MS,
+        detail: "test",
+      },
+    );
+    await world.pass(cls);
+    expect(cls.releasedNames).not.toContain("scheduler-old");
+    expect(
+      (await readReleasePending(world.handle())).find(
+        (p) => p.name === "scheduler-old",
+      )?.unregisteredAtMs,
+    ).toBe(T0_MS);
+    world.clock += LANE_HANDOFF_SETTLE_MS - 1;
+    await world.pass(cls);
+    expect(cls.releasedNames).not.toContain("scheduler-old");
+    world.clock += 1;
+    await world.pass(cls);
+    expect(cls.releasedNames).toContain("scheduler-old");
   });
 
   // A stateless class's callers may hold an old name in a cache, so its

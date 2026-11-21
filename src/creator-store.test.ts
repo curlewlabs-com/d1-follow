@@ -17,6 +17,8 @@ import {
 import { registeredClassOf, SLOT_IDENTITY_SQL } from "./slot-identity";
 import { registerSpare, SPARE_SQL } from "./spare-store";
 import {
+  restampReleasePending,
+  PENDING_RELEASE_UNSTAMPED_MS,
   beginCreation,
   beginRelease,
   clearBackoff,
@@ -683,12 +685,17 @@ describe("release", () => {
       atMs: AT_MS + 5,
       detail: "answered from IAD",
     });
+    // Queued unstamped, so never due, until the caller stamps it.
+    expect((await readReleasePending(db))[0]?.unregisteredAtMs).toBe(
+      PENDING_RELEASE_UNSTAMPED_MS,
+    );
+    await restampReleasePending(db, "lane-slot-03", AT_MS + 6);
     const [pending] = await readReleasePending(db);
     expect(pending).toEqual({
       name: "lane-slot-03",
       classCode: LANE_CLASS,
       objectId: "id-lane-slot-03",
-      unregisteredAtMs: AT_MS + 5,
+      unregisteredAtMs: AT_MS + 6,
     });
     if (pending === undefined) throw new Error("no pending release");
 
