@@ -24,7 +24,11 @@ import {
   stampSpareVerified,
   unregisterSpare,
 } from "./spare-store";
-import { registeredClassOf, SLOT_IDENTITY_SQL } from "./slot-identity";
+import {
+  readPlacementClaim,
+  registeredClassOf,
+  SLOT_IDENTITY_SQL,
+} from "./slot-identity";
 
 const ORD = "ORD" as Colo;
 const MIA = "MIA" as Colo;
@@ -234,6 +238,11 @@ describe("the spares", () => {
     });
     expect(await registeredClassOf(db, "spare-01")).toBe(STATELESS_CLASS);
     expect(await registeredClassOf(db, "spare-03")).toBeNull();
+    expect(await readPlacementClaim(db, "spare-03")).toBeNull();
+    expect(await readPlacementClaim(db, "spare-02")).toEqual({
+      kind: "registered",
+      classCode: STATELESS_CLASS,
+    });
 
     await stampSpareVerified(db, {
       name: "spare-01",
@@ -250,6 +259,31 @@ describe("the spares", () => {
       { opId: "u", atMs: AT_MS + 2, detail: "the primary moved" },
     );
     expect(await registeredClassOf(db, "spare-02")).toBeNull();
+    expect(await readPlacementClaim(db, "spare-01")).toEqual({
+      kind: "registered",
+      classCode: STATELESS_CLASS,
+    });
+    expect(await readPlacementClaim(db, "spare-02")).toEqual({
+      kind: "pending_release",
+      classCode: STATELESS_CLASS,
+      unregisteredAtMs: AT_MS + 2,
+    });
+  });
+
+  // A reseed can register a name whose previous release is still queued.
+  // Returning only the pending row would let cleanup empty a live spare.
+  test("cleanup refuses conflicting registered and pending claims", async () => {
+    const spare = slot(STATELESS_CLASS, ORD, "spare-01");
+    await registerSpare(db, spare, { opId: "first", kind: "created" });
+    await unregisterSpare(
+      db,
+      { name: spare.name, verifiedAtMs: null },
+      { opId: "removed", atMs: AT_MS + 1, detail: "the primary moved" },
+    );
+    await registerSpare(db, spare, { opId: "reseed", kind: "created" });
+    await expect(readPlacementClaim(db, spare.name)).rejects.toThrow(
+      "conflicting placement claims",
+    );
   });
 
   // The lookup runs on every placement call, from the codec, against the
@@ -265,6 +299,24 @@ describe("the spares", () => {
     expect(steps).toEqual([
       expect.stringMatching(/^SEARCH follow_slot USING INDEX .*\(name=\?\)$/),
       expect.stringMatching(/^SEARCH follow_spare USING INDEX .*\(name=\?\)$/),
+    ]);
+  });
+
+  // A backlog of failed releases must not turn a name lookup into a scan.
+  test("placement claims use a name index in every arm", () => {
+    const plan = sqlite
+      .query(`EXPLAIN QUERY PLAN ${SLOT_IDENTITY_SQL.readPlacementClaim}`)
+      .all() as { detail: string }[];
+    expect(
+      plan
+        .map((step) => step.detail)
+        .filter((detail) => /^(SEARCH|SCAN) /.test(detail)),
+    ).toEqual([
+      expect.stringMatching(/^SEARCH follow_slot USING INDEX .*\(name=\?\)$/),
+      expect.stringMatching(/^SEARCH follow_spare USING INDEX .*\(name=\?\)$/),
+      expect.stringMatching(
+        /^SEARCH follow_release_pending USING INDEX .*\(name=\?\)$/,
+      ),
     ]);
   });
 

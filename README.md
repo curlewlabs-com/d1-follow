@@ -69,7 +69,7 @@ ships TypeScript source, so it needs a bundler or test runner that compiles
 TypeScript, as Wrangler and `@cloudflare/vitest-plugin` do:
 
 ```sh
-bun add https://github.com/curlewlabs-com/d1-follow/releases/download/v0.4.0/curlewlabs-com-d1-follow-0.4.0.tgz
+bun add https://github.com/curlewlabs-com/d1-follow/releases/download/v0.5.0/curlewlabs-com-d1-follow-0.5.0.tgz
 ```
 
 The lockfile records the tarball's integrity, and each release is immutable.
@@ -154,9 +154,8 @@ The place, mark-in-place and release calls each receive a `deadlineMs`, and each
 must refuse once the object's own clock reads past it, before it touches
 storage. The deadline ends inside the creator's pass lease. A call that arrives
 later belongs to a pass that may no longer hold the lease, and acting on it
-could undo the work of the pass that does. A release call should also refuse
-your serving objects, a lane's current holder and any registered slot or spare
-(`registeredClassOf`), each read when the call arrives.
+could undo the work of the pass that does. Placement and release also enforce
+the [placement guard](#guard-placement-and-release) at the object.
 
 The design below says what each of those calls must do. The test that a feature
 belongs in this package is whether it stays useful with your app swapped for
@@ -361,7 +360,11 @@ invocations that overlap never fill the same gap twice:
   lane's holder, is not the deployment default, and, for a stateless class, has
   been out of the registry for a day. A release that fails is retried on later
   passes, no more per class per pass than the attempts bound, least recently
-  attempted first, so releases that keep failing never hold back the rest.
+  attempted first, so releases that keep failing never hold back the rest. The
+  holder check is a read, so for a class a lane can hand off to, a handoff that
+  validated the slot while it was registered can still commit after it; the
+  release is safe only while the class's release delay outlasts any handoff your
+  app can still commit, or your app excludes handoffs through the release.
 
 A pass renews its lease before each step that acts, and checks it again after
 every call that acts on an object (a creation, a placement, a release, or the
@@ -418,21 +421,21 @@ Cloudflare in that colo.
 
 Built: the table, the identity table beside it and the store's statements for
 registering, verifying, unregistering and promoting a spare
-(`src/spare-store.ts`); the class lookup an app's placement refusal reads, which
-covers spares (`registeredClassOf`); the census, which counts them
-(`src/census.ts`); and the creator's pass, which keeps each class's spares in
-the primary's colo, verifies them by their marker, marks one again where it is
-when it answers there without it, takes them out when the primary moves,
-promotes one when the primary's colo loses its base slot, and takes out any
-beyond the class's count, keeping verified ones first; a spare counts against
-the count once registered and toward the class's readiness only once verified
-(`src/creator-spares.ts`). An app sets each class's count
-(`CreatorClass.spares`). A caller can discover a verified standby as described
-below. The caller owns execution and its placement audit. An app may keep spares
-of a class beside the base slot in the colo its primary is in, and only there:
-that is where a request is served and where a lane hands off, so it is where a
-colo-mate is worth its observe call. `follow_slot`'s key is
-`(class_code, colo)`, which gives every slot of a class in a colo the same
+(`src/spare-store.ts`); the claim reader a
+[placement guard](#guard-placement-and-release) reads (`readPlacementClaim`),
+which covers spares; the census, which counts them (`src/census.ts`); and the
+creator's pass, which keeps each class's spares in the primary's colo, verifies
+them by their marker, marks one again where it is when it answers there without
+it, takes them out when the primary moves, promotes one when the primary's colo
+loses its base slot, and takes out any beyond the class's count, keeping
+verified ones first; a spare counts against the count once registered and toward
+the class's readiness only once verified (`src/creator-spares.ts`). An app sets
+each class's count (`CreatorClass.spares`). A caller can discover a verified
+standby as described below. The caller owns execution and its placement audit.
+An app may keep spares of a class beside the base slot in the colo its primary
+is in, and only there: that is where a request is served and where a lane hands
+off, so it is where a colo-mate is worth its observe call. `follow_slot`'s key
+is `(class_code, colo)`, which gives every slot of a class in a colo the same
 identity, so a spare cannot be a row there, and re-keying that table would need
 every reader cut over behind rollback floors. So the registry stays as it is,
 holding the base slots, and the spares go in a table of their own, keyed by
@@ -456,17 +459,17 @@ below.
   registry, a verified spare of the class there moves into `follow_slot` in one
   batch, with its ledger record, so the colo keeps a base slot with no creation.
 - **Who reads the new table.** Every reader whose job is to protect or account
-  for slots: the codec's refusal of registered slots, so no placement probe can
-  empty a spare; the creator's pass, which observes and releases spares as it
-  does base slots, and verifies one only while it answers from its colo holding
-  the marker placed for that colo; the census; and, once a spare can serve as
-  the failover standby, the placement audit. An app's failover reads it too,
-  since its standby is a verified spare beside the primary. A lane's handoff
-  reads it, because the object a lane must leave can be the colo's base slot: an
-  object Cloudflare moved keeps its row until the creator's next pass, and a
-  lane that stopped at that row would wait for the pass beside a verified spare.
-  A forward keeps reading the base slots alone: a stale row costs it a request
-  served no closer, which the next pass mends.
+  for slots: the [placement guard](#guard-placement-and-release), which protects
+  spares through release; the creator's pass, which observes and releases spares
+  as it does base slots, and verifies one only while it answers from its colo
+  holding the marker placed for that colo; the census; and, once a spare can
+  serve as the failover standby, the placement audit. An app's failover reads it
+  too, since its standby is a verified spare beside the primary. A lane's
+  handoff reads it, because the object a lane must leave can be the colo's base
+  slot: an object Cloudflare moved keeps its row until the creator's next pass,
+  and a lane that stopped at that row would wait for the pass beside a verified
+  spare. A forward keeps reading the base slots alone: a stale row costs it a
+  request served no closer, which the next pass mends.
 - **The order, and what a rollback does.** The store's reads of the new table,
   and each reader above, deploy first, while the table is empty and nothing
   changes. Only then does the creator register a spare. A Worker rolled back to
@@ -512,11 +515,16 @@ before addressing it and before dispatch at the receiver, allowing for clock
 skew. The spare's last verification anchors its release bound because a creator
 can decide to unregister before the registry write becomes visible. A release
 delay must outlast outstanding answers, including through restores and
-configuration changes. During a restore, stop issuance, drain outstanding
-answers and reverify restored markers before resuming. This lookup does not make
-a timed-out write safe to retry. An abandonable attempt must return a target
-that starts route work only when its caller selects it. Once execution has been
-sent, losing its result cannot authorize another execution.
+configuration changes. The release delay protects an answer only from receivers
+that enforce the [placement guard](#guard-placement-and-release), so every
+receiver that can clear a standby's storage enforces it before any answer is
+issued. Before rolling back to a receiver without it, stop issuance and let
+every outstanding answer expire; the spare-table rollback above covers markers,
+not answers. During a restore, stop issuance, drain outstanding answers and
+reverify restored markers before resuming. This lookup does not make a timed-out
+write safe to retry. An abandonable attempt must return a target that starts
+route work only when its caller selects it. Once execution has been sent, losing
+its result cannot authorize another execution.
 
 **Measuring the accept window.** In an adopting deployment, each side recorded
 its own elapsed time, joined offline by a per-attempt ID. Subtracting the
@@ -531,6 +539,38 @@ returning the result. Measure direct time to the prepare target and count calls
 that never return one before choosing a window for a deployment. The shortest
 client wait must accommodate the accept window, discovery, and the standby's
 cold start and execution before the caller gives up.
+
+### Guard placement and release
+
+`readPlacementClaim(creatorDb, name)` (available in v0.5.0) reports the
+creator's claim on a name in one read of its registry and release queue:
+`registered` with its class for a base slot or spare, `pending_release` with its
+class and `unregisteredAtMs` for a name the creator has unregistered and not yet
+released, or `null` for neither. It throws on conflicting claims.
+`registeredClassOf` answers only whether a name is registered now, so a mutation
+receiver uses `readPlacementClaim` instead.
+
+A placement or release receiver that enforces the guard reads the claim from the
+primary, uncached, when the call arrives, and refuses:
+
+- any failure to read it;
+- a `registered` name;
+- placement of a `pending_release` name, which still belongs to the releaser;
+- release of a `pending_release` name before the class's release delay has
+  passed since `unregisteredAtMs`.
+
+It also refuses your serving names and a lane's current holder, which the
+creator's tables do not record, and leaves untouched any storage the placement
+protocol does not own. `CreatorConfig.protectedNames` scopes only what the
+creator's own passes release; it is not a receiver rule, so an app can still
+retire such a name deliberately.
+
+A `null` claim describes the registry and release queue at the moment of the
+read and nothing more. The guard cannot see a creator pass or lane handoff
+already in flight, an open placement intent, or a standby answer already issued,
+so it does not make cleanup of a creator-managed name safe on its own. An
+application that cleans up such names outside the creator owns the exclusion
+that makes it safe.
 
 ## Where the state lives
 
@@ -550,9 +590,8 @@ The tool's state is split by who reads it on a hot path:
   in the background, cached, at most once every ten minutes. A lane reads them
   only when its run reaches the threshold. The creator and the audit read them
   on their own schedules. The app binds the creator's database for those reads.
-  Its placement method also reads the registry and the spares, uncached, and
-  refuses to place or release a name either holds (`registeredClassOf`), since
-  the creator takes a slot or a spare out of its table before it releases it.
+  Its mutation receivers enforce the
+  [placement guard](#guard-placement-and-release).
 
 The creator copies each lane change from the change log into the ledger on its
 next pass, so the ledger stays the one account of every move. Keeping the
