@@ -417,21 +417,21 @@ Cloudflare in that colo.
 
 Built: the table, the identity table beside it and the store's statements for
 registering, verifying, unregistering and promoting a spare
-(`src/spare-store.ts`); the [placement guard](#guard-placement-and-release),
-whose claim lookup covers spares; the census, which counts them
-(`src/census.ts`); and the creator's pass, which keeps each class's spares in
-the primary's colo, verifies them by their marker, marks one again where it is
-when it answers there without it, takes them out when the primary moves,
-promotes one when the primary's colo loses its base slot, and takes out any
-beyond the class's count, keeping verified ones first; a spare counts against
-the count once registered and toward the class's readiness only once verified
-(`src/creator-spares.ts`). An app sets each class's count
-(`CreatorClass.spares`). A caller can discover a verified standby as described
-below. The caller owns execution and its placement audit. An app may keep spares
-of a class beside the base slot in the colo its primary is in, and only there:
-that is where a request is served and where a lane hands off, so it is where a
-colo-mate is worth its observe call. `follow_slot`'s key is
-`(class_code, colo)`, which gives every slot of a class in a colo the same
+(`src/spare-store.ts`); the claim reader a
+[placement guard](#guard-placement-and-release) reads (`readPlacementClaim`),
+which covers spares; the census, which counts them (`src/census.ts`); and the
+creator's pass, which keeps each class's spares in the primary's colo, verifies
+them by their marker, marks one again where it is when it answers there without
+it, takes them out when the primary moves, promotes one when the primary's colo
+loses its base slot, and takes out any beyond the class's count, keeping
+verified ones first; a spare counts against the count once registered and toward
+the class's readiness only once verified (`src/creator-spares.ts`). An app sets
+each class's count (`CreatorClass.spares`). A caller can discover a verified
+standby as described below. The caller owns execution and its placement audit.
+An app may keep spares of a class beside the base slot in the colo its primary
+is in, and only there: that is where a request is served and where a lane hands
+off, so it is where a colo-mate is worth its observe call. `follow_slot`'s key
+is `(class_code, colo)`, which gives every slot of a class in a colo the same
 identity, so a spare cannot be a row there, and re-keying that table would need
 every reader cut over behind rollback floors. So the registry stays as it is,
 holding the base slots, and the spares go in a table of their own, keyed by
@@ -511,13 +511,16 @@ before addressing it and before dispatch at the receiver, allowing for clock
 skew. The spare's last verification anchors its release bound because a creator
 can decide to unregister before the registry write becomes visible. A release
 delay must outlast outstanding answers, including through restores and
-configuration changes. Apply the
-[placement guard](#guard-placement-and-release). During a restore, stop
-issuance, drain outstanding answers and reverify restored markers before
-resuming. This lookup does not make a timed-out write safe to retry. An
-abandonable attempt must return a target that starts route work only when its
-caller selects it. Once execution has been sent, losing its result cannot
-authorize another execution.
+configuration changes. The release delay protects an answer only from receivers
+that enforce the [placement guard](#guard-placement-and-release), so every
+receiver that can clear a standby's storage enforces it before any answer is
+issued. Before rolling back to a receiver without it, stop issuance and let
+every outstanding answer expire; the spare-table rollback above covers markers,
+not answers. During a restore, stop issuance, drain outstanding answers and
+reverify restored markers before resuming. This lookup does not make a timed-out
+write safe to retry. An abandonable attempt must return a target that starts
+route work only when its caller selects it. Once execution has been sent, losing
+its result cannot authorize another execution.
 
 **Measuring the accept window.** In an adopting deployment, each side recorded
 its own elapsed time, joined offline by a per-attempt ID. Subtracting the
