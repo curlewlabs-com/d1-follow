@@ -100,16 +100,16 @@ describe("releasing", () => {
     const cls = scriptedClass([ORD]);
     await world.seed("scheduler-old", ORD, T0_MS - HOUR_MS);
     cls.where.set("scheduler-old", IAD);
-    let committedAtMs: number | null = null;
+    const commit: { atMs?: number } = {};
     world.afterBatch = () => {
       const queued = world.creator
         .query(
           "SELECT 1 FROM follow_release_pending WHERE name = 'scheduler-old'",
         )
         .get();
-      if (queued !== null && committedAtMs === null) {
+      if (queued !== null && commit.atMs === undefined) {
         world.clock += MINUTE_MS;
-        committedAtMs = world.clock;
+        commit.atMs = world.clock;
       }
     };
     await world.pass(cls);
@@ -117,8 +117,8 @@ describe("releasing", () => {
     const pending = await readReleasePending(world.handle());
     expect(
       pending.find((p) => p.name === "scheduler-old")?.unregisteredAtMs,
-    ).toBe(committedAtMs ?? -1);
-    expect(committedAtMs).not.toBeNull();
+    ).toBe(commit.atMs);
+    expect(commit.atMs).toBeDefined();
   });
 
   // A stateless class's callers may hold an old name in a cache, so its
