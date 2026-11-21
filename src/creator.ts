@@ -136,7 +136,9 @@ export interface CreatorPassDeps {
   // The creator's own database (schema/creator.sql).
   readonly db: SqlDatabase;
   // The app's database, read only for where its primary is and for its lane
-  // tables (schema/lane.sql).
+  // tables (schema/lane.sql). Its lane reads must reach the primary uncached:
+  // the release step's holder check is what a handoff's settle time protects,
+  // and a replica could hide a swap that has already committed.
   readonly appDb: SqlDatabase;
   readonly config: CreatorConfig;
   readonly now: () => number;
