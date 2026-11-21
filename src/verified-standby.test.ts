@@ -1,12 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { Colo } from "./colo";
-import {
-  PENDING_RELEASE_UNSTAMPED_MS,
-  moveSlot,
-  unregisterSlot,
-  readReleasePending,
-} from "./creator-store";
+import { moveSlot, unregisterSlot, readReleasePending } from "./creator-store";
 import { unregisterSpare, promoteSpare } from "./spare-store";
 import { sqliteHandle } from "./sqlite-test-handle";
 import { readVerifiedStandby, type StandbyLookup } from "./verified-standby";
@@ -143,10 +138,7 @@ test.each(["spare", "promoted"] as const)(
         { opId: "remove", atMs: verifiedAtMs - 1, detail: "moved" },
       ),
     ).toBe(true);
-    // Queued unstamped: never due, so it cannot outrun an issued answer before
-    // the creator stamps it, and the creator stamps no earlier than the
-    // verification (creator-slots.ts, creator-spares.ts).
     const [pending] = await readReleasePending(db);
-    expect(pending?.unregisteredAtMs).toBe(PENDING_RELEASE_UNSTAMPED_MS);
+    expect(pending?.unregisteredAtMs).toBe(verifiedAtMs);
   },
 );

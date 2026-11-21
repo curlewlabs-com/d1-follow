@@ -8,7 +8,6 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import type { Colo } from "./colo";
 import { sqliteHandle } from "./sqlite-test-handle";
 import {
-  PENDING_RELEASE_UNSTAMPED_MS,
   beginCreation,
   readOpenIntents,
   readReleasePending,
@@ -264,12 +263,10 @@ describe("the spares", () => {
       kind: "registered",
       classCode: STATELESS_CLASS,
     });
-    // Unstamped until the creator sees the unregister commit, which reads to a
-    // receiver as inside its hold.
     expect(await readPlacementClaim(db, "spare-02")).toEqual({
       kind: "pending_release",
       classCode: STATELESS_CLASS,
-      unregisteredAtMs: PENDING_RELEASE_UNSTAMPED_MS,
+      unregisteredAtMs: AT_MS + 2,
     });
   });
 

@@ -3,7 +3,6 @@
 // sec."Spare slots in a table of their own"), which a verified spare can
 // become.
 import {
-  PENDING_RELEASE_UNSTAMPED_MS,
   CREATOR_SQL,
   LEDGER_KIND,
   ledgerStatement,
@@ -141,11 +140,14 @@ export async function unregisterSpare(
         spare.name,
         spare.verifiedAtMs,
       ),
-    // Queued unstamped until the caller sees this commit
-    // (PENDING_RELEASE_UNSTAMPED_MS in creator-store.ts).
+    // A clock correction cannot let release outrun an issued standby answer.
     db
       .prepare(SPARE_SQL.holdSpareForRelease)
-      .bind(PENDING_RELEASE_UNSTAMPED_MS, spare.name, spare.verifiedAtMs),
+      .bind(
+        Math.max(record.atMs, spare.verifiedAtMs ?? record.atMs),
+        spare.name,
+        spare.verifiedAtMs,
+      ),
     releaseIdentity(db, "spare", spare),
     db.prepare(SPARE_SQL.deleteSpare).bind(spare.name, spare.verifiedAtMs),
   ]);

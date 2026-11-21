@@ -26,7 +26,6 @@ import {
   readSlots,
   recordLaneChange,
   recordReleased,
-  stampUnstampedReleases,
   recordSpentName,
   registerSlot,
   setBackoff,
@@ -793,7 +792,6 @@ async function runLeasedPass(
   // Each class reads only its due releases, at most the attempts bound, so a
   // backlog costs a pass no more reads, calls or ledger rows than that.
   const keepList = [...(await keepNames())];
-  await stampUnstampedReleases(db, passStartMs);
   for (const cls of config.classes) {
     const due = await readReleaseDue(db, {
       classCode: cls.code,

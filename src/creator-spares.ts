@@ -177,12 +177,7 @@ export async function observeSpares(pass: {
       kept.push(spare);
       continue;
     }
-    // A clock correction cannot let release outrun an issued standby answer.
-    await restampReleasePending(
-      db,
-      spare.name,
-      Math.max(pass.now(), spare.verifiedAtMs ?? 0),
-    );
+    await restampReleasePending(db, spare.name, pass.now());
     unregistered.push({
       classCode: spare.classCode,
       name: spare.name,
@@ -255,12 +250,7 @@ export async function settleSpares(pass: {
       lingering.push(spare);
       return;
     }
-    // A clock correction cannot let release outrun an issued standby answer.
-    await restampReleasePending(
-      db,
-      spare.name,
-      Math.max(pass.now(), spare.verifiedAtMs ?? 0),
-    );
+    await restampReleasePending(db, spare.name, pass.now());
     unregistered.push({
       classCode: spare.classCode,
       name: spare.name,
