@@ -712,6 +712,48 @@ stays useful with the app swapped for another.
   logs, so no name is issued twice; and check each registry and spare row
   against its object's marker.
 
+### Diagnose a D1 outage followed by a primary move
+
+A staging incident showed how to track database availability and object
+placement separately. For the placement audit, apply `primaryColoOf` to the
+metadata of each application-database result from the object executing the
+request or tick, including each result in a batch. Record each usable colo with
+its attempt and observation time.
+
+- **During the outage**, application requests logged a D1 storage-startup error
+  and the query metrics stopped reporting activity. Use the application error
+  alongside the query metrics. Mark primary placement as unknown when you have
+  no usable primary colo for the interval. A region or instance identifier alone
+  gives no colo observation.
+- **After queries resumed around 00:31 UTC**, a result reported ORD at 00:35.
+  The first ATL observation came at 00:36. Record the last observation of the
+  old colo and the first of the new one to show when you observed the change. D1
+  was already answering when ATL was first observed. The cause of the
+  storage-startup error remained unknown.
+- **After the ATL observation**, the ORD object forwarded successfully to an ATL
+  slot. A later request used a cached hint to address an ATL slot directly and
+  ran beside the primary. The lane changed holders at 00:40 and ran its first
+  ATL tick at 00:41. The tick establishes where the lane ran. Its primary colo
+  is unknown in this example. Check the forwarding outcome, then compare the
+  receiving object's execution colo with every distinct primary colo from its
+  application-database results on that attempt. Apply the same check to direct
+  requests and lane ticks, and record any mismatches. Mark placement unknown if
+  the execution colo or usable primary evidence is missing.
+
+To decide whether a standby would help, check the caller's record of an accept,
+a missed accept deadline, or an explicit refusal. Trace any standby lookup and
+the selected target's execution separately. In this incident, the inspected logs
+showed D1 storage-startup errors and contained no standby lookup events. Leave
+the accept outcome unknown when the caller lacks evidence to classify it.
+
+After an overdue accept,
+[standby discovery](#discover-a-standby-after-a-missed-accept) can help if the
+original target can start work only when selected and the caller has yet to send
+execution. Discovery reads the same app database. If that read fails or yields
+no usable primary colo, record that as the reason discovery ended without a
+standby. Record database errors from the selected target against its execution
+phase.
+
 ## Development
 
 Requires [Bun](https://bun.sh) 1.4.4.
