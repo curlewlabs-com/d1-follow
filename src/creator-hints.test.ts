@@ -333,8 +333,8 @@ describe("rounds", () => {
   // Dry-run writes none of the pacing's state. A pass in which no class acts
   // still records a registered slot's colo as a candidate, so the colo is not
   // lost if the slot then leaves, but it ends no wait, and says so as a
-  // failure. A pass in which a class acts later finds the colo known, and the
-  // waits stand.
+  // failure. The first pass in which a class acts finds each wait set before
+  // the colo joined, drops it, and opens the round.
   test("records a colo but ends no wait in a pass where every class is in dry-run", async () => {
     seedWait(wait("enam", 4, 3));
     await world.seed("scheduler-den", DEN, T0_MS);
@@ -357,7 +357,66 @@ describe("rounds", () => {
     await world.act();
     const acting = await at(1);
     expect(acting.failures).toEqual([]);
-    expect(await waits()).toEqual([wait("enam", 4, 3)]);
+    expect(acting.regionHintsProbed).toEqual(["enam"]);
+    expect(await waits()).toEqual([wait("enam", 2, 3)]);
+  });
+
+  // The risk this guards: a wait of a hint the creator no longer probes
+  // through, such as an app hint the configuration has since changed,
+  // standing until that hint comes back and then holding back its first
+  // round. A pass in which a class acts deletes it.
+  test("deletes the wait of a hint the creator no longer holds", async () => {
+    seedWait(wait("wnam", 4, 3));
+    await at(0);
+    expect(await waits()).toEqual([wait("enam", 2, 2)]);
+    expect(world.lines).toContain(
+      "[follow] region hint wnam's wait deleted - the creator no longer probes through it",
+    );
+  });
+
+  // A creation whose intent could not be written was never made, so it
+  // begins no gap's record: the gap stays one no pass has created for.
+  test("begins no gap record for a creation whose intent was not written", async () => {
+    world.primary = { colo: MIA, region: "ENAM" };
+    const nameless: ScriptedClass = {
+      ...cls,
+      nameOf: () => {
+        throw new Error("no name");
+      },
+    };
+    await expect(at(0, [nameless])).rejects.toThrow("no name");
+    expect(await readGaps(world.handle())).toEqual([]);
+  });
+
+  // The risk this guards: a pass stopping after a creation filled a gap but
+  // before the class's turn ended would leave the gap's old record, so the
+  // gap, reopened later, would start old. The creation settles the record at
+  // once.
+  test("deletes a gap's record as soon as a creation fills it", async () => {
+    seedHint("weur");
+    world.candidate(IAD, T0_MS - 48 * HOUR_MS);
+    world.creator
+      .query(
+        "INSERT INTO follow_gap (class_code, colo, kind, begun_at_ms, attempted_at_ms) VALUES (?, 'IAD', 1, ?, NULL)",
+      )
+      .run(SCHEDULER, T0_MS - 48 * HOUR_MS);
+    const filling = scriptedClass([ORD], { enam: [IAD], weur: [ORD] });
+    filling.where.set("scheduler-ord", ORD);
+    const stopping: ScriptedClass = {
+      ...filling,
+      observe: async (name, hint) => {
+        if (hint === "weur") {
+          world.creator
+            .query("UPDATE follow_pass SET holder = 'next-pass'")
+            .run();
+        }
+        return await filling.observe(name, hint);
+      },
+    };
+    const report = await at(0, [stopping]);
+    expect(report.created.map((o) => o.colo)).toEqual([IAD]);
+    expect(report.leaseLost).toBe(true);
+    expect(await readGaps(world.handle())).toEqual([]);
   });
 
   // A fresh creator starts in dry-run with its slots registered and no wait

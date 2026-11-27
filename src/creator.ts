@@ -14,6 +14,7 @@
 // logs what they would do.
 import { readLaneChangesAfter, readLaneHolders } from "./app-lane-reads";
 import type { Colo } from "./colo";
+import { readNewestCandidateAtMs } from "./candidate-store";
 import { PassCandidates, syncRegionHints } from "./creator-candidates";
 import {
   keepsProbing,
@@ -764,8 +765,12 @@ async function runLeasedPass(
   const waits = new Map(
     (await readHintWaits(db)).map((wait) => [wait.regionHint, wait]),
   );
+  const learnedAtMs = await readNewestCandidateAtMs(db);
   const hintPacing = new Map(
-    regionHints.map((hint) => [hint, paceHint(waits.get(hint), clock)]),
+    regionHints.map((hint) => [
+      hint,
+      paceHint(waits.get(hint), clock, learnedAtMs),
+    ]),
   );
   for (const [hint, pacing] of hintPacing) {
     if (pacing.dueAtMs !== null) {
@@ -959,6 +964,7 @@ async function runLeasedPass(
         if (!(await deleteGap(db, record, fence.holder))) {
           throw new LeaseLost();
         }
+        gapRecords.delete(gapKey(cls.code, record.colo));
         log(
           dropped
             ? `[follow] ${cls.label} gap record in ${record.colo} cannot be trusted - deleted`
@@ -977,10 +983,15 @@ async function runLeasedPass(
     }
     // Makes one creation through `regionHint`, and resolves the colo it
     // answered from, or null when it answered with none, its answer was lost
-    // or its outcome was not recorded. `dispatched` runs as the creation's
-    // call is made.
+    // or its outcome was not recorded. `recorded` writes the records of the
+    // gaps the creation is for, once its intent is written and before its
+    // call, so a creation whose intent could not be written begins no gap's
+    // record; `dispatched` runs as the call is made. A creation that recorded
+    // its outcome settles the class's gap records at once, so a gap it filled
+    // loses its record even if the pass stops before its next step.
     const attempt = async (
       regionHint: string,
+      recorded: () => Promise<void>,
       dispatched?: () => void,
     ): Promise<Colo | null> => {
       await hold();
@@ -992,7 +1003,8 @@ async function runLeasedPass(
         nameOf: (n) => cls.nameOf(n, regionHint),
         objectIdOf: (name) => cls.objectIdOf(name),
       });
-      let answer: Colo | null = null;
+      await recorded();
+      let answer: Colo | null;
       try {
         dispatched?.();
         const { colo } = await call(() => cls.observe(name, regionHint));
@@ -1009,13 +1021,14 @@ async function runLeasedPass(
         if (error instanceof LeaseLost) throw error;
         // The intent stays open for a later pass to resolve by observing.
         fail(`create ${name}: ${message(error)}`);
+        return null;
       }
+      await settleGaps();
       return answer;
     };
     for (const regionHint of regionHints) {
       if (!inRound(regionHint) && !youngGap()) continue;
-      await recordProbe();
-      const answer = await attempt(regionHint, () => {
+      const answer = await attempt(regionHint, recordProbe, () => {
         reportProbed(regionHint);
       });
       if (answer !== null) usable.add(regionHint);
@@ -1024,8 +1037,7 @@ async function runLeasedPass(
     if (paced !== null && paced.pacing.due && primaryHint !== null) {
       const attempts = budget.get(cls.code) ?? 0;
       for (let i = 0; i < attempts && primaryGap(); i++) {
-        await recordAttempt(paced);
-        await attempt(primaryHint);
+        await attempt(primaryHint, () => recordAttempt(paced));
       }
     } else {
       const note = waitNote();
@@ -1062,6 +1074,17 @@ async function runLeasedPass(
       }
       log(`[follow] region hint ${hint}'s wait cannot be trusted - deleted`);
     }
+  }
+  // A wait of a hint the creator no longer holds, such as an app hint its
+  // configuration has since changed, would stand untouched until the hint
+  // came back, and then hold back that hint's first round. Any pass in which
+  // a class acts deletes it.
+  for (const hint of anyActs && !candidates.addedAny ? waits.keys() : []) {
+    if (hintPacing.has(hint)) continue;
+    if (!(await deleteHintWait(db, hint, fence.holder))) throw new LeaseLost();
+    log(
+      `[follow] region hint ${hint}'s wait deleted - the creator no longer probes through it`,
+    );
   }
 
   // Release what has been out of the registry long enough and holds no lane.
