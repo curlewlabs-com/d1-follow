@@ -9,6 +9,7 @@ import {
   integerField,
   returnedRows,
   type SqlDatabase,
+  type SqlStatement,
 } from "./creator-store";
 import { HOLDS_PASS_LEASE } from "./pass-lease";
 
@@ -67,6 +68,56 @@ export async function readGaps(db: SqlDatabase): Promise<GapRecord[]> {
         attempted === null ? null : integerField(row, "attempted_at_ms"),
     };
   });
+}
+
+// The statements that write `records`, each guarded on `holder` holding the
+// pass lease, then the lease check `leaseHeldIn` reads: for a batch another
+// store commits, such as a creation's intent (beginCreation), so the records
+// commit with it or not at all. Empty with no record.
+export function gapWriteStatements(
+  db: SqlDatabase,
+  records: readonly GapRecord[],
+  holder: string,
+): SqlStatement[] {
+  if (records.length === 0) return [];
+  return [
+    ...records.map((record) =>
+      db
+        .prepare(GAP_SQL.writeGap)
+        .bind(
+          record.classCode,
+          record.colo,
+          GAP_KIND_CODE[record.kind],
+          record.begunAtMs,
+          record.attemptedAtMs,
+          holder,
+        ),
+    ),
+    db.prepare(GAP_SQL.holdsLease).bind(holder),
+  ];
+}
+
+// As gapWriteStatements, for the delete of a gap's record: for the batch
+// that registers the slot or spare which fills the gap.
+export function gapDeleteStatements(
+  db: SqlDatabase,
+  gap: { readonly classCode: number; readonly colo: Colo },
+  holder: string,
+): SqlStatement[] {
+  return [
+    db.prepare(GAP_SQL.deleteGap).bind(gap.classCode, gap.colo, holder),
+    db.prepare(GAP_SQL.holdsLease).bind(holder),
+  ];
+}
+
+// Whether the pass still held its lease when a batch carrying statements
+// from gapWriteStatements or gapDeleteStatements committed, read from those
+// statements' results; true when there were none.
+export function leaseHeldIn(results: readonly unknown[]): boolean {
+  if (results.length === 0) return true;
+  return (
+    returnedRows(results[results.length - 1], "gap lease check").length > 0
+  );
 }
 
 // Writes a gap's record while `holder` holds the pass lease; false when it

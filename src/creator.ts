@@ -43,8 +43,10 @@ import {
 } from "./creator-store";
 import {
   deleteGap,
+  gapDeleteStatements,
+  gapWriteStatements,
+  leaseHeldIn,
   readGaps,
-  writeGap,
   type GapKind,
   type GapRecord,
 } from "./gap-store";
@@ -598,6 +600,14 @@ async function runLeasedPass(
     if (!holds(cls.code, colo)) return "base";
     return primary?.colo === colo && sparesShort(cls) ? "spare" : null;
   };
+  // The gaps' records (gap-store.ts), read once, and kept as the pass writes
+  // and deletes them.
+  const gapKey = (classCode: number, colo: Colo): string =>
+    `${classCode}:${colo}`;
+  const gapRecords = new Map<string, GapRecord>();
+  for (const record of await readGaps(db)) {
+    gapRecords.set(gapKey(record.classCode, record.colo), record);
+  }
   const keep = async (
     cls: CreatorClass,
     name: string,
@@ -619,11 +629,29 @@ async function runLeasedPass(
       registeredAtMs: atMs,
       verifiedAtMs: null,
     };
+    // The gap this object fills: the class's missing slot in the colo, or its
+    // shortfall of spares there once this is the last spare it keeps. Its
+    // record goes in the batch that registers the object, so a pass that
+    // stops after the registration leaves no record of a gap it filled.
+    const filled = gapRecords.get(gapKey(cls.code, colo));
+    const retired =
+      filled !== undefined &&
+      (role === "base"
+        ? filled.kind === "slot"
+        : filled.kind === "spares" &&
+          (occupied.get(cls.code) ?? 0) + 1 >= cls.spares)
+        ? filled
+        : undefined;
+    let alongside: readonly unknown[];
     try {
-      await (role === "base" ? registerSlot : registerSpare)(db, slot, {
-        opId,
-        kind: "created",
-      });
+      alongside = await (role === "base" ? registerSlot : registerSpare)(
+        db,
+        slot,
+        { opId, kind: "created" },
+        retired === undefined
+          ? []
+          : gapDeleteStatements(db, retired, fence.holder),
+      );
     } catch (error) {
       // Placed but not registered: a marked object outside the registry would
       // never cease and never be released, so it is emptied, unless the keep
@@ -638,6 +666,13 @@ async function runLeasedPass(
         );
       }
       throw error;
+    }
+    if (retired !== undefined) {
+      if (!leaseHeldIn(alongside)) throw new LeaseLost();
+      gapRecords.delete(gapKey(cls.code, colo));
+      log(
+        `[follow] ${cls.label} gap in ${colo} closed - its record is deleted`,
+      );
     }
     if (role === "spare") {
       // Counted once registered, before its stamp: a stamp that fails must not
@@ -756,12 +791,6 @@ async function runLeasedPass(
     capMs: config.maxBackoffMs,
     passIntervalMs: config.passIntervalMs,
   };
-  const gapKey = (classCode: number, colo: Colo): string =>
-    `${classCode}:${colo}`;
-  const gapRecords = new Map<string, GapRecord>();
-  for (const record of await readGaps(db)) {
-    gapRecords.set(gapKey(record.classCode, record.colo), record);
-  }
   const waits = new Map(
     (await readHintWaits(db)).map((wait) => [wait.regionHint, wait]),
   );
@@ -887,56 +916,50 @@ async function runLeasedPass(
       );
       continue;
     }
-    // A probe is a creation for every gap the class has, so before each one
-    // the pass begins the record of each gap that has none of its kind, or
-    // one it cannot trust, as an attempt's record comes before the attempt.
-    // Such a record has no attempt, so the attempts start it over on the
-    // first pass that can make one (creator-gaps.ts). A refused write means
-    // the lease is gone, and the pass stops before the probe.
-    const recordProbe = async (): Promise<void> => {
+    // A probe is a creation for every gap the class has, so it begins the
+    // record of each gap that has none of its kind, or one the pass cannot
+    // trust. Such a record has no attempt, so the attempts start it over on
+    // the first pass that can make one (creator-gaps.ts).
+    const probeRecords = (): GapRecord[] => {
+      const records: GapRecord[] = [];
       for (const colo of candidates.judged(primary)) {
         const kind = gapIn(colo);
         if (kind === null) continue;
-        const key = gapKey(cls.code, colo);
-        const held = gapRecords.get(key);
+        const held = gapRecords.get(gapKey(cls.code, colo));
         if (held?.kind === kind && !untrustedGap(held, passStartMs)) continue;
-        const record: GapRecord = {
-          classCode: cls.code,
-          colo,
-          kind,
-          begunAtMs: passStartMs,
-          attemptedAtMs: null,
-        };
-        if (!(await writeGap(db, record, fence.holder))) throw new LeaseLost();
         if (held?.kind === kind) {
           log(
             `[follow] ${cls.label} gap record in ${colo} cannot be trusted - replaced`,
           );
         }
-        gapRecords.set(key, record);
+        records.push({
+          classCode: cls.code,
+          colo,
+          kind,
+          begunAtMs: passStartMs,
+          attemptedAtMs: null,
+        });
       }
+      return records;
     };
-    // Each attempt at the gap in the primary's colo is recorded before it is
-    // made, under the lease, as a creation's intent comes before it: the
-    // pass's first attempt at each kind of gap writes the record, so a pass
-    // that stops partway has recorded what it attempted, and a kind no
-    // creation was made for gets no record. A gap whose kind changed under
-    // this pass's attempts began with them. A refused write means the lease
-    // is gone, and the pass stops before the attempt.
+    // The pass's first attempt at each kind of gap in the primary's colo
+    // records it, so a pass that stops partway has recorded what it
+    // attempted, and a kind no creation was made for gets no record. A gap
+    // whose kind changed under this pass's attempts began with them.
     const recorded = new Set<GapKind>();
-    const recordAttempt = async (paced: Paced): Promise<void> => {
+    const attemptRecords = (paced: Paced): GapRecord[] => {
       const kind = gapIn(paced.colo);
-      if (kind === null || recorded.has(kind)) return;
+      if (kind === null || recorded.has(kind)) return [];
       recorded.add(kind);
-      const record: GapRecord = {
-        classCode: cls.code,
-        colo: paced.colo,
-        kind,
-        begunAtMs: paced.kind === kind ? paced.pacing.begunAtMs : passStartMs,
-        attemptedAtMs: passStartMs,
-      };
-      if (!(await writeGap(db, record, fence.holder))) throw new LeaseLost();
-      gapRecords.set(gapKey(cls.code, paced.colo), record);
+      return [
+        {
+          classCode: cls.code,
+          colo: paced.colo,
+          kind,
+          begunAtMs: paced.kind === kind ? paced.pacing.begunAtMs : passStartMs,
+          attemptedAtMs: passStartMs,
+        },
+      ];
     };
     // A gap's record goes once a pass sees the gap filled, of another kind,
     // or gone from the class: a colo that is no candidate and no longer the
@@ -983,27 +1006,34 @@ async function runLeasedPass(
     }
     // Makes one creation through `regionHint`, and resolves the colo it
     // answered from, or null when it answered with none, its answer was lost
-    // or its outcome was not recorded. `recorded` writes the records of the
-    // gaps the creation is for, once its intent is written and before its
-    // call, so a creation whose intent could not be written begins no gap's
-    // record; `dispatched` runs as the call is made. A creation that recorded
-    // its outcome settles the class's gap records at once, so a gap it filled
-    // loses its record even if the pass stops before its next step.
+    // or its outcome was not recorded. `records` gives the records of the
+    // gaps the creation is for, which commit in the batch that writes its
+    // intent, both before its call, so neither stands without the other. A
+    // refused record write means the lease is gone, and the pass stops before
+    // the call; `dispatched` runs as the call is made.
     const attempt = async (
       regionHint: string,
-      recorded: () => Promise<void>,
+      records: () => GapRecord[],
       dispatched?: () => void,
     ): Promise<Colo | null> => {
       await hold();
       const opId = deps.newOpId();
-      const { name } = await beginCreation(db, {
-        classCode: cls.code,
-        opId,
-        atMs: deps.now(),
-        nameOf: (n) => cls.nameOf(n, regionHint),
-        objectIdOf: (name) => cls.objectIdOf(name),
-      });
-      await recorded();
+      const writes = records();
+      const { name, alongside } = await beginCreation(
+        db,
+        {
+          classCode: cls.code,
+          opId,
+          atMs: deps.now(),
+          nameOf: (n) => cls.nameOf(n, regionHint),
+          objectIdOf: (name) => cls.objectIdOf(name),
+        },
+        gapWriteStatements(db, writes, fence.holder),
+      );
+      if (!leaseHeldIn(alongside)) throw new LeaseLost();
+      for (const record of writes) {
+        gapRecords.set(gapKey(record.classCode, record.colo), record);
+      }
       let answer: Colo | null;
       try {
         dispatched?.();
@@ -1023,12 +1053,11 @@ async function runLeasedPass(
         fail(`create ${name}: ${message(error)}`);
         return null;
       }
-      await settleGaps();
       return answer;
     };
     for (const regionHint of regionHints) {
       if (!inRound(regionHint) && !youngGap()) continue;
-      const answer = await attempt(regionHint, recordProbe, () => {
+      const answer = await attempt(regionHint, probeRecords, () => {
         reportProbed(regionHint);
       });
       if (answer !== null) usable.add(regionHint);
@@ -1037,7 +1066,7 @@ async function runLeasedPass(
     if (paced !== null && paced.pacing.due && primaryHint !== null) {
       const attempts = budget.get(cls.code) ?? 0;
       for (let i = 0; i < attempts && primaryGap(); i++) {
-        await attempt(primaryHint, () => recordAttempt(paced));
+        await attempt(primaryHint, () => attemptRecords(paced));
       }
     } else {
       const note = waitNote();

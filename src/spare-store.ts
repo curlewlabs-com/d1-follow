@@ -10,6 +10,7 @@ import {
   slotFromRow,
   type Slot,
   type SqlDatabase,
+  type SqlStatement,
 } from "./creator-store";
 import type { Colo } from "./colo";
 import { holdIdentity, releaseIdentity } from "./slot-identity";
@@ -60,8 +61,11 @@ export async function registerSpare(
   db: SqlDatabase,
   spare: Slot,
   record: { readonly opId: string; readonly kind: "created" | "seeded" },
-): Promise<void> {
-  await db.batch([
+  // As registerSlot's: statements committed in the same batch, whose results
+  // are returned in order.
+  alongside: readonly SqlStatement[] = [],
+): Promise<readonly unknown[]> {
+  const statements = [
     holdIdentity(db, spare),
     db
       .prepare(SPARE_SQL.insertSpare)
@@ -85,7 +89,9 @@ export async function registerSpare(
     ...(record.kind === "created"
       ? [db.prepare(CREATOR_SQL.closeIntent).bind(record.opId)]
       : []),
-  ]);
+  ];
+  const results = await db.batch([...statements, ...alongside]);
+  return results.slice(statements.length);
 }
 
 // A spare's latest verification (creator-spares.ts decides what verifies one),

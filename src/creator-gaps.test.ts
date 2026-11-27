@@ -472,10 +472,41 @@ describe("the gap's record", () => {
     expect(await gaps()).toEqual([gap(MIA, 1, 1, "spares")]);
   });
 
-  // As above for a pass whose only write of a record is a delete: with no
-  // lane to copy and nothing to release, no later renewal would notice the
-  // lease went, so the delete itself reports it and the pass says it stopped.
-  test("is not deleted by a pass that lost its lease after its gap filled", async () => {
+  // A filled gap's record is deleted in the batch that registers the slot
+  // filling it, guarded on the lease: a pass that lost its lease just before
+  // that batch deletes nothing the pass now holding the lease relies on, and
+  // the delete itself reports the lease lost, so the pass says it stopped.
+  test("is not deleted by a pass that lost its lease as its gap filled", async () => {
+    await at(0);
+    landings.unshift(MIA);
+    let stolen = false;
+    world.clock = T0_MS + HOUR_MS;
+    const report = await world.pass(
+      cls,
+      { attemptsPerClassPerPass: ATTEMPTS, laneCodes: [] },
+      (query) => {
+        if (
+          !stolen &&
+          cls.placed.length === 1 &&
+          query.startsWith("UPDATE follow_pass SET claimed_until_ms")
+        ) {
+          stolen = true;
+          world.creator
+            .query("UPDATE follow_pass SET holder = 'next-pass'")
+            .run();
+        }
+      },
+    );
+    expect(stolen).toBe(true);
+    expect(report.leaseLost).toBe(true);
+    expect(await gaps()).toEqual([gap(MIA, 0, 0)]);
+    expect(world.lines.filter((l) => l.includes("closed"))).toEqual([]);
+  });
+
+  // The risk this guards: a pass that registers the slot filling a gap and
+  // then stops, leaving the gap's record, so the gap, reopened when that slot
+  // leaves, starts old. The record goes in the registration's own batch.
+  test("is deleted in the batch that registers the slot filling it", async () => {
     await at(0);
     landings.unshift(MIA);
     world.afterBatch = () => {
@@ -492,8 +523,6 @@ describe("the gap's record", () => {
       laneCodes: [],
     });
     expect(report.created.map((o) => o.colo)).toEqual([MIA]);
-    expect(report.leaseLost).toBe(true);
-    expect(await gaps()).toEqual([gap(MIA, 0, 0)]);
-    expect(world.lines.filter((l) => l.includes("closed"))).toEqual([]);
+    expect(await gaps()).toEqual([]);
   });
 });

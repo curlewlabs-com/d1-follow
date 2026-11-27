@@ -124,7 +124,11 @@ test("the schema applies again over itself, keeping every row", async () => {
       nameOf: (n) => `slot-${n}`,
       objectIdOf: idOf,
     }),
-  ).toEqual({ number: taken.number + 1, name: `slot-${taken.number + 1}` });
+  ).toEqual({
+    number: taken.number + 1,
+    name: `slot-${taken.number + 1}`,
+    alongside: [],
+  });
 });
 
 describe("beginCreation", () => {
@@ -149,14 +153,17 @@ describe("beginCreation", () => {
     expect(await take(STATELESS_CLASS, "a", nameOf)).toEqual({
       number: 1,
       name: "slot-01",
+      alongside: [],
     });
     expect(await take(STATELESS_CLASS, "b", nameOf)).toEqual({
       number: 2,
       name: "slot-02",
+      alongside: [],
     });
     expect(await take(LANE_CLASS, "c", (n) => `lane-slot-${n}`)).toEqual({
       number: 1,
       name: "lane-slot-1",
+      alongside: [],
     });
   });
 
