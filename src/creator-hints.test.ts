@@ -385,6 +385,25 @@ describe("rounds", () => {
     );
   });
 
+  // The same stale wait would otherwise outlast every pass a class spends in
+  // observe mode, and hold back that hint's first round if it comes back
+  // before a class acts. It is deleted whatever the mode.
+  test("deletes the wait of a hint the creator no longer holds in a pass where every class is in observe mode", async () => {
+    seedWait(wait("wnam", 4, 3));
+    await setMode(world.handle(), {
+      kind: "class",
+      code: SCHEDULER,
+      mode: "observe",
+      opId: "observe",
+      atMs: T0_MS,
+    });
+    await at(0);
+    expect(await waits()).toEqual([]);
+    expect(world.lines).toContain(
+      "[follow] region hint wnam's wait deleted - the creator no longer probes through it",
+    );
+  });
+
   // A hint the primary's region has just named has no wait, so its first
   // pass is a round, whatever the other hints' waits.
   test("probes through a hint just added on its first pass", async () => {
