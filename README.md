@@ -407,9 +407,7 @@ most land beside a slot their class has. The day one lands where no creation has
 landed before, the colo joins the candidates, every hint's wait ends, and the
 probe is its class's first slot there: Cloudflare places objects there, so the
 primary could move there. The slots registered when the creator first runs are
-landings too, so their colos are the set it starts from, from the first pass in
-which a class acts: adding a colo ends every hint's wait, so a pass with every
-class in dry-run adds none and reports each it would add as a failure. A colo
+landings too, so their colos are the set it starts from, in either mode. A colo
 stays a candidate once added, since the primary may come back to a colo it left;
 retiring one is an operator's decision. The ledger records the colo each
 creation landed in, which is what a colo's share of the landings, and a colo
@@ -472,10 +470,11 @@ young gap keeps probing on every pass.
   that stalled and lost its lease cannot put back a wait the pass holding it
   deleted.
 - **Dry-run** makes no probe and writes no wait, and logs the hints it would
-  probe through. A pass with every class in dry-run adds no colo either, since
-  the add would end every wait; it reports the colo as a failure instead. A
-  pass's report names the hints a class that acts probed through
-  (`regionHintsProbed`), beside every hint the creator holds (`regionHints`).
+  probe through. A pass with every class in dry-run still adds a registered
+  slot's colo to the candidates, so the colo is not lost if the slot then
+  leaves, but ends no wait, and reports that as a failure. A pass's report names
+  the hints a class that acts probed through (`regionHintsProbed`), beside every
+  hint the creator holds (`regionHints`).
 
 What the cap bounds is the cost of a steady day: a hint whose rounds teach
 nothing is probed once per class per cap, where it was probed once per class per

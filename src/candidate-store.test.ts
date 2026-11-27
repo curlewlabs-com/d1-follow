@@ -36,10 +36,10 @@ async function leased(): Promise<CreatorWorld> {
 // repeat it.
 test("a colo or hint added twice keeps its first place", async () => {
   const db = (await leased()).handle();
-  await addCandidateColo(db, ORD, T0_MS + 2, HOLDER);
-  await addCandidateColo(db, MIA, T0_MS + 1, HOLDER);
-  await addCandidateColo(db, DEN, T0_MS + 1, HOLDER);
-  await addCandidateColo(db, MIA, T0_MS + 3, HOLDER);
+  await addCandidateColo(db, ORD, T0_MS + 2, HOLDER, true);
+  await addCandidateColo(db, MIA, T0_MS + 1, HOLDER, true);
+  await addCandidateColo(db, DEN, T0_MS + 1, HOLDER, true);
+  await addCandidateColo(db, MIA, T0_MS + 3, HOLDER, true);
   expect(await readCandidateColos(db)).toEqual([DEN, MIA, ORD]);
 
   await addRegionHint(db, "weur", T0_MS + 1);
@@ -60,7 +60,7 @@ test("adding a colo deletes every hint's wait in its batch", async () => {
       HOLDER,
     );
   }
-  expect(await addCandidateColo(db, DEN, T0_MS, HOLDER)).toBe(true);
+  expect(await addCandidateColo(db, DEN, T0_MS, HOLDER, true)).toBe(true);
   expect(await readHintWaits(db)).toEqual([]);
 });
 
@@ -74,7 +74,22 @@ test("a pass without the lease adds no colo and deletes no wait", async () => {
     dueAtMs: T0_MS + 2 * HOUR_MS,
   };
   await writeHintWait(db, wait, HOLDER);
-  expect(await addCandidateColo(db, DEN, T0_MS, "pass-0")).toBe(false);
+  expect(await addCandidateColo(db, DEN, T0_MS, "pass-0", true)).toBe(false);
   expect(await readCandidateColos(db)).toEqual([]);
+  expect(await readHintWaits(db)).toEqual([wait]);
+});
+
+// A pass in which no class acts writes none of the pacing's state, so its add
+// leaves every wait as it was.
+test("adding a colo without ending the waits leaves them", async () => {
+  const db = (await leased()).handle();
+  const wait = {
+    regionHint: "enam",
+    waitMs: 2 * HOUR_MS,
+    dueAtMs: T0_MS + 2 * HOUR_MS,
+  };
+  await writeHintWait(db, wait, HOLDER);
+  expect(await addCandidateColo(db, DEN, T0_MS, HOLDER, false)).toBe(true);
+  expect(await readCandidateColos(db)).toEqual([DEN]);
   expect(await readHintWaits(db)).toEqual([wait]);
 });

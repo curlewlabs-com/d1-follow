@@ -330,11 +330,12 @@ describe("rounds", () => {
     expect(await waits()).toEqual([wait("enam", 48, 0)]);
   });
 
-  // Dry-run writes none of the pacing's state. Adding a colo ends every
-  // hint's wait, so a pass in which no class acts adds none, even for a slot
-  // an operator registered in a new colo: it reports a failure instead, and
-  // the first pass in which a class acts adds the colo and ends the waits.
-  test("adds no colo and ends no wait in a pass where every class is in dry-run", async () => {
+  // Dry-run writes none of the pacing's state. A pass in which no class acts
+  // still records a registered slot's colo as a candidate, so the colo is not
+  // lost if the slot then leaves, but it ends no wait, and says so as a
+  // failure. A pass in which a class acts later finds the colo known, and the
+  // waits stand.
+  test("records a colo but ends no wait in a pass where every class is in dry-run", async () => {
     seedWait(wait("enam", 4, 3));
     await world.seed("scheduler-den", DEN, T0_MS);
     cls.where.set("scheduler-den", DEN);
@@ -347,15 +348,16 @@ describe("rounds", () => {
     });
     const dry = await at(0);
     expect(dry.failures).toEqual([
-      "dry-run - candidate colo DEN, where a slot is registered, not added: adding it would end every hint's wait, so a pass in which a class acts adds it",
+      "dry-run - candidate colo DEN added, where a slot is registered, and every hint's wait left as it was: dry-run writes no pacing state",
     ]);
-    expect(await readCandidateColos(world.handle())).toEqual([ORD]);
+    expect(dry.learnedColos).toEqual([]);
+    expect(await readCandidateColos(world.handle())).toEqual([ORD, DEN]);
     expect(await waits()).toEqual([wait("enam", 4, 3)]);
 
     await world.act();
-    await at(1);
-    expect(await readCandidateColos(world.handle())).toEqual([ORD, DEN]);
-    expect(await waits()).toEqual([]);
+    const acting = await at(1);
+    expect(acting.failures).toEqual([]);
+    expect(await waits()).toEqual([wait("enam", 4, 3)]);
   });
 
   // A hint the primary's region has just named has no wait, so its first

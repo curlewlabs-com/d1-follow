@@ -8,9 +8,8 @@
 //
 // The app supplies each class's calls and names and the databases; this owns
 // the decisions and their records. Observing and recording run in either mode,
-// except the pacing's state: a pass with every class in dry-run adds no
-// candidate colo, since the add ends every hint's wait, and reports it as a
-// failure. Creating and releasing objects run only in act mode, and dry-run
+// except the pacing's state: a pass with every class in dry-run that adds a
+// candidate colo ends no hint's wait, and reports that as a failure. Creating and releasing objects run only in act mode, and dry-run
 // logs what they would do.
 import { readLaneChangesAfter, readLaneHolders } from "./app-lane-reads";
 import type { Colo } from "./colo";

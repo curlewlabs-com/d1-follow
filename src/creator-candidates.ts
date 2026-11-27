@@ -32,9 +32,9 @@ export class PassCandidates {
   // an object that landed there, so its colo joins the first time a pass reads
   // it, and stays a candidate after the slot leaves, its gap reported. Adding
   // one ends every hint's wait, which dry-run must not do, so a pass in which
-  // no class acts (`acts` false) adds none: it reports each it would add as a
-  // failure, through `fail`, and leaves it to the first pass in which a class
-  // acts.
+  // no class acts (`acts` false) adds the colo and leaves every wait as it
+  // was, and reports that through `fail`, since the waits then do not know of
+  // the colo.
   static async load(
     db: SqlDatabase,
     holder: string,
@@ -54,9 +54,9 @@ export class PassCandidates {
     );
     for (const colo of new Set(registered)) {
       if (!pass.acts) {
-        if (!candidates.has(colo)) {
+        if (await candidates.record(colo, atMs, false)) {
           pass.fail(
-            `dry-run - candidate colo ${colo}, where a slot is registered, not added: adding it would end every hint's wait, so a pass in which a class acts adds it`,
+            `dry-run - candidate colo ${colo} added, where a slot is registered, and every hint's wait left as it was: dry-run writes no pacing state`,
           );
         }
         continue;
@@ -81,11 +81,21 @@ export class PassCandidates {
   // and lost its answer has deleted every wait, which this pass must then
   // not write again.
   async add(colo: Colo | null, atMs: number): Promise<boolean> {
+    return await this.record(colo, atMs, true);
+  }
+
+  // Adds `colo`, ending every hint's wait only with `endWaits`; true when it
+  // joined.
+  private async record(
+    colo: Colo | null,
+    atMs: number,
+    endWaits: boolean,
+  ): Promise<boolean> {
     if (colo === null || this.colos.includes(colo)) {
       return false;
     }
-    this.added = true;
-    if (!(await addCandidateColo(this.db, colo, atMs, this.holder))) {
+    if (endWaits) this.added = true;
+    if (!(await addCandidateColo(this.db, colo, atMs, this.holder, endWaits))) {
       throw new LeaseLost();
     }
     this.colos.push(colo);
