@@ -510,23 +510,22 @@ and a one-day cap, a gap no attempt fills gets about 24 rounds in its first day
 and one a day after.
 
 - **The record.** The pass that makes a gap's first creation records when it
-  began, and each pass that attempts it records that attempt, each once the
-  creation's intent is written and before its call: a creation whose intent
-  could not be written begins no record, and a pass that stops partway has
-  recorded what it created, and fails toward fewer attempts, never more. A gap's
-  age is wall time from its first creation, whether or not later passes can
-  create: a class in dry-run, or one with an attempt left open, makes no
-  creation, and its gap ages all the same.
+  began, and each pass that attempts it records that attempt, each in the batch
+  that writes the creation's intent, before its call: neither stands without the
+  other, and a pass that stops partway has recorded what it created, and fails
+  toward fewer attempts, never more. A gap's age is wall time from its first
+  creation, whether or not later passes can create: a class in dry-run, or one
+  with an attempt left open, makes no creation, and its gap ages all the same.
 - **Young again.** A record no attempt has followed since it began has paced no
   attempt: a probe began it while the primary was elsewhere, or while the
   primary's region named no hint. The first pass that can attempt the gap starts
   the record over, and the gap is young again from then, for its class's probes
   as for its attempts.
-- **Its end.** A pass deletes a gap's record when it sees the gap filled,
-  straight after the creation that filled it, or sees that the class no longer
-  has it: a colo that is neither a candidate nor the primary's, or a shortfall
-  of spares in a colo the primary has left. A gap that returns is a new one,
-  young again.
+- **Its end.** A pass deletes a gap's record when it sees the gap filled, in the
+  batch that registers the slot, or the last spare, that fills it, or when it
+  sees that the class no longer has it: a colo that is neither a candidate nor
+  the primary's, or a shortfall of spares in a colo the primary has left. A gap
+  that returns is a new one, young again.
 - **Its kind.** A record keeps what the class lacks: its slot in the colo, or,
   with its slot in the primary's colo, the spares it keeps there. A pass that
   sees the gap change kind deletes the record, and the gap is a new one. So a
