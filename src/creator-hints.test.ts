@@ -360,6 +360,27 @@ describe("rounds", () => {
     expect(await waits()).toEqual([wait("enam", 4, 3)]);
   });
 
+  // A fresh creator starts in dry-run with its slots registered and no wait
+  // anywhere, so recording their colos leaves nothing standing, and is no
+  // failure: the failure list stays a signal during normal setup.
+  test("records a colo in dry-run with no failure while no wait stands", async () => {
+    await world.seed("scheduler-den", DEN, T0_MS);
+    cls.where.set("scheduler-den", DEN);
+    await setMode(world.handle(), {
+      kind: "class",
+      code: SCHEDULER,
+      mode: "dry_run",
+      opId: "dry",
+      atMs: T0_MS,
+    });
+    const dry = await at(0);
+    expect(dry.failures).toEqual([]);
+    expect(await readCandidateColos(world.handle())).toEqual([ORD, DEN]);
+    expect(world.lines).toContain(
+      "[follow] candidate colo DEN added - a slot is registered there",
+    );
+  });
+
   // A hint the primary's region has just named has no wait, so its first
   // pass is a round, whatever the other hints' waits.
   test("probes through a hint just added on its first pass", async () => {

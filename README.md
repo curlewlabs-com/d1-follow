@@ -472,9 +472,9 @@ young gap keeps probing on every pass.
 - **Dry-run** makes no probe and writes no wait, and logs the hints it would
   probe through. A pass with every class in dry-run still adds a registered
   slot's colo to the candidates, so the colo is not lost if the slot then
-  leaves, but ends no wait, and reports that as a failure. A pass's report names
-  the hints a class that acts probed through (`regionHintsProbed`), beside every
-  hint the creator holds (`regionHints`).
+  leaves, but ends no wait, and reports that as a failure while a wait stands. A
+  pass's report names the hints a class that acts probed through
+  (`regionHintsProbed`), beside every hint the creator holds (`regionHints`).
 
 What the cap bounds is the cost of a steady day: a hint whose rounds teach
 nothing is probed once per class per cap, where it was probed once per class per

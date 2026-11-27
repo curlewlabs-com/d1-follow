@@ -9,7 +9,8 @@
 // The app supplies each class's calls and names and the databases; this owns
 // the decisions and their records. Observing and recording run in either mode,
 // except the pacing's state: a pass with every class in dry-run that adds a
-// candidate colo ends no hint's wait, and reports that as a failure. Creating and releasing objects run only in act mode, and dry-run
+// candidate colo ends no hint's wait, and reports that as a failure while a
+// wait stands. Creating and releasing objects run only in act mode, and dry-run
 // logs what they would do.
 import { readLaneChangesAfter, readLaneHolders } from "./app-lane-reads";
 import type { Colo } from "./colo";
@@ -501,13 +502,19 @@ async function runLeasedPass(
     registry.set(slot.name, slot);
   }
 
+  const acts = config.classes.some(
+    (c) => modes.modeOf("class", c.code) === "act",
+  );
   const candidates = await PassCandidates.load(
     db,
     fence.holder,
     [...registry.values()].map((s) => s.colo),
     {
       atMs: passStartMs,
-      acts: config.classes.some((c) => modes.modeOf("class", c.code) === "act"),
+      acts,
+      // Read only for a pass in which no class acts, which says when its add
+      // left a wait standing.
+      waitsStand: !acts && (await readHintWaits(db)).length > 0,
       log,
       fail,
     },

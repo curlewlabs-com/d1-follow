@@ -33,8 +33,9 @@ export class PassCandidates {
   // it, and stays a candidate after the slot leaves, its gap reported. Adding
   // one ends every hint's wait, which dry-run must not do, so a pass in which
   // no class acts (`acts` false) adds the colo and leaves every wait as it
-  // was, and reports that through `fail`, since the waits then do not know of
-  // the colo.
+  // was. While a wait stands (`waitsStand`) it reports that through `fail`,
+  // since the waits then do not know of the colo; with none, as on a fresh
+  // creator's first passes, the add is an ordinary one.
   static async load(
     db: SqlDatabase,
     holder: string,
@@ -42,6 +43,7 @@ export class PassCandidates {
     pass: {
       readonly atMs: number;
       readonly acts: boolean;
+      readonly waitsStand: boolean;
       readonly log: (line: string) => void;
       readonly fail: (line: string) => void;
     },
@@ -54,9 +56,14 @@ export class PassCandidates {
     );
     for (const colo of new Set(registered)) {
       if (!pass.acts) {
-        if (await candidates.record(colo, atMs, false)) {
+        if (!(await candidates.record(colo, atMs, false))) continue;
+        if (pass.waitsStand) {
           pass.fail(
             `dry-run - candidate colo ${colo} added, where a slot is registered, and every hint's wait left as it was: dry-run writes no pacing state`,
+          );
+        } else {
+          log(
+            `[follow] candidate colo ${colo} added - a slot is registered there`,
           );
         }
         continue;
