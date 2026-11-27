@@ -33,11 +33,14 @@ export function paceHint(
   wait: HintWait | undefined,
   at: PassClock,
 ): HintPacing {
-  if (wait === undefined || at.capMs <= at.passIntervalMs) {
+  if (wait === undefined) {
     return { round: true, reason: "none", waitMs: null, dueAtMs: null };
   }
   if (wait.waitMs > at.capMs || wait.dueAtMs - at.passStartMs > wait.waitMs) {
     return { round: true, reason: "untrusted", waitMs: null, dueAtMs: null };
+  }
+  if (at.capMs <= at.passIntervalMs) {
+    return { round: true, reason: "due", waitMs: null, dueAtMs: null };
   }
   const dueAtMs = passReading(wait.dueAtMs, at.passIntervalMs);
   return at.passStartMs >= dueAtMs

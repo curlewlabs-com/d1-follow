@@ -1023,9 +1023,11 @@ async function runLeasedPass(
   // a wait the next pass deleted.
   for (const [hint, pacing] of candidates.addedAny ? [] : hintPacing) {
     if (!pacing.round || !made.has(hint)) continue;
-    if (usable.has(hint) && !taught.has(hint)) {
-      const wait = nextHintWait(hint, pacing, clock);
-      if (wait === null) continue;
+    const wait =
+      usable.has(hint) && !taught.has(hint)
+        ? nextHintWait(hint, pacing, clock)
+        : null;
+    if (wait !== null) {
       if (!(await writeHintWait(db, wait, fence.holder))) throw new LeaseLost();
       log(
         `[follow] region hint ${hint}'s round taught nothing - its next round is a pass from ${new Date(passReading(wait.dueAtMs, config.passIntervalMs)).toISOString()}`,

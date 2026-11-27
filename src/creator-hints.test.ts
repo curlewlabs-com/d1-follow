@@ -303,6 +303,24 @@ describe("a cap no longer than a pass", () => {
   });
 });
 
+describe("a cap lowered to one pass and raised again", () => {
+  // The risk this guards: a wait set under a day's cap outliving a cap
+  // lowered to one pass, so that raising the cap again resumes a schedule
+  // the lower cap discarded. Longer than the cap, it is dropped.
+  test("drops a wait longer than the lowered cap", async () => {
+    await at(0);
+    expect(await waits()).toEqual([wait("enam", 2, 2)]);
+    world.clock = T0_MS + HOUR_MS;
+    const lowered = await world.pass(cls, {
+      maxBackoffMs: HOUR_MS,
+      laneCodes: [],
+    });
+    expect(lowered.regionHintsProbed).toEqual(["enam"]);
+    expect(await waits()).toEqual([]);
+    expect((await at(1.5)).regionHintsProbed).toEqual(["enam"]);
+  });
+});
+
 describe("a wait the pass cannot trust", () => {
   // The risk this guards: a cap since lowered, a clock that ran backward or a
   // hand edit leaves a wait that would hold the probes back for as long as it
