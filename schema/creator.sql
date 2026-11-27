@@ -66,13 +66,13 @@ CREATE TABLE IF NOT EXISTS follow_name_counter (
   last_number INTEGER NOT NULL CHECK (last_number >= 0)
 ) STRICT;
 
--- One row per class or lane that has left dry-run. A missing row reads as
--- dry-run, so nothing acts until a mode is set.
+-- One row per class or lane that has left observe mode. A missing row reads as
+-- observe mode, so nothing acts until a mode is set.
 CREATE TABLE IF NOT EXISTS follow_mode (
   -- 1 a class, 2 a lane.
   subject_kind INTEGER NOT NULL CHECK (subject_kind IN (1, 2)),
   subject_code INTEGER NOT NULL CHECK (subject_code > 0),
-  -- 1 dry-run, 2 act.
+  -- 1 observe, 2 act.
   mode INTEGER NOT NULL CHECK (mode IN (1, 2)),
   changed_at_ms INTEGER NOT NULL,
   PRIMARY KEY (subject_kind, subject_code)
@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS follow_ledger (
   lane_seq INTEGER CHECK (lane_seq IS NULL OR lane_seq >= 1),
   from_name TEXT CHECK (from_name IS NULL OR length(from_name) > 0),
   changed_by INTEGER CHECK (changed_by IS NULL OR changed_by IN (1, 2, 3)),
-  -- A mode change's new mode, under class_code or lane_code: 1 dry-run, 2 act.
+  -- A mode change's new mode, under class_code or lane_code: 1 observe, 2 act.
   mode INTEGER CHECK (mode IS NULL OR mode IN (1, 2)),
   detail TEXT,
   CHECK (

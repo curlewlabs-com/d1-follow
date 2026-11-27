@@ -116,12 +116,12 @@ describe("a slot that answers from another colo", () => {
     expect(report.unregistered.map((s) => s.name)).toEqual(["scheduler-moved"]);
   });
 
-  // Marking writes to the object, which a class in dry-run never does.
-  test("is taken out without a mark in dry-run", async () => {
-    const dry = await CreatorWorld.open();
-    await dry.seed("scheduler-moved", ORD, T0_MS - HOUR_MS);
-    dry.candidate(IAD, T0_MS - HOUR_MS);
-    const report = await dry.pass(cls);
+  // Marking writes to the object, which a class in observe mode never does.
+  test("is taken out without a mark in observe mode", async () => {
+    const observed = await CreatorWorld.open();
+    await observed.seed("scheduler-moved", ORD, T0_MS - HOUR_MS);
+    observed.candidate(IAD, T0_MS - HOUR_MS);
+    const report = await observed.pass(cls);
     expect(report.moved).toEqual([]);
     expect(report.unregistered.map((s) => s.name)).toEqual(["scheduler-moved"]);
     expect(cls.marked.get("scheduler-moved")).toBe(ORD);

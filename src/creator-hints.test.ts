@@ -85,7 +85,7 @@ const waits = async (): Promise<HintWait[]> =>
 // `landings`; its slot in ORD is seeded, and it acts unless `mode` says not.
 async function worker(
   landings: Colo[],
-  mode: "act" | "dry_run" = "act",
+  mode: "act" | "observe" = "act",
 ): Promise<ScriptedClass> {
   const base = scriptedClass(landings);
   const other: ScriptedClass = {
@@ -229,21 +229,21 @@ describe("rounds", () => {
     expect(await waits()).toEqual([]);
   });
 
-  // Dry-run makes no probe and writes no wait; it says what it would probe
+  // Observe mode makes no probe and writes no wait; it says what it would probe
   // through. The class beside it that acts makes the round.
-  test("lets a class in dry-run beside one that acts leave the round to it", async () => {
-    const dry = await worker([ORD], "dry_run");
-    const round = await at(0, [cls, dry]);
+  test("lets a class in observe mode beside one that acts leave the round to it", async () => {
+    const observed = await worker([ORD], "observe");
+    const round = await at(0, [cls, observed]);
     expect(round.spent.map((o) => o.classCode)).toEqual([SCHEDULER]);
     expect(round.wouldCreate).toEqual([WORKER]);
     expect(world.lines).toContain(
-      "[follow] worker dry-run - would probe through enam",
+      "[follow] worker observe - would probe through enam",
     );
     expect(await waits()).toEqual([wait("enam", 2, 2)]);
 
-    const waiting = await at(1, [cls, dry]);
+    const waiting = await at(1, [cls, observed]);
     expect(world.lines).toContain(
-      "[follow] worker dry-run - would probe through no hint",
+      "[follow] worker observe - would probe through no hint",
     );
     expect(waiting.wouldCreate).toEqual([]);
   });
@@ -259,8 +259,9 @@ describe("rounds", () => {
   });
 
   // A class with attempts open creates nothing until they resolve, so its
-  // dry-run forecast says so and does not count it as one that would create.
-  test("forecasts a dry-run class behind open attempts as conditional", async () => {
+  // forecast in observe mode says so and does not count it as one that would
+  // create.
+  test("forecasts a class in observe mode behind open attempts as conditional", async () => {
     world.creator
       .query(
         "INSERT INTO follow_open_intent (op_id, class_code, name, at_ms) VALUES ('op-open', ?, 'scheduler-test-enam-9', ?)",
@@ -269,14 +270,14 @@ describe("rounds", () => {
     await setMode(world.handle(), {
       kind: "class",
       code: SCHEDULER,
-      mode: "dry_run",
+      mode: "observe",
       opId: "dry",
       atMs: T0_MS,
     });
     const report = await at(0);
     expect(report.wouldCreate).toEqual([]);
     expect(world.lines).toContain(
-      "[follow] scheduler dry-run - would resolve its open attempts first, then probe through enam",
+      "[follow] scheduler observe - would resolve its open attempts first, then probe through enam",
     );
   });
 
@@ -310,14 +311,14 @@ describe("rounds", () => {
     ]);
   });
 
-  // With every class in dry-run nothing is probed, so nothing moves the
+  // With every class in observe mode nothing is probed, so nothing moves the
   // wait, a wait the pass could not trust included.
-  test("writes no wait in a pass where every class is in dry-run", async () => {
+  test("writes no wait in a pass where every class is in observe mode", async () => {
     seedWait(wait("enam", 48, 0));
     await setMode(world.handle(), {
       kind: "class",
       code: SCHEDULER,
-      mode: "dry_run",
+      mode: "observe",
       opId: "dry",
       atMs: T0_MS,
     });
@@ -325,32 +326,32 @@ describe("rounds", () => {
     expect(report.regionHintsProbed).toEqual([]);
     expect(report.wouldCreate).toEqual([SCHEDULER]);
     expect(world.lines).toContain(
-      "[follow] scheduler dry-run - would probe through enam",
+      "[follow] scheduler observe - would probe through enam",
     );
     expect(await waits()).toEqual([wait("enam", 48, 0)]);
   });
 
-  // Dry-run writes none of the pacing's state. A pass in which no class acts
-  // still records a registered slot's colo as a candidate, so the colo is not
-  // lost if the slot then leaves, but it ends no wait, and says so as a
+  // Observe mode writes none of the pacing's state. A pass in which no class
+  // acts still records a registered slot's colo as a candidate, so the colo is
+  // not lost if the slot then leaves, but it ends no wait, and says so as a
   // failure. The first pass in which a class acts finds each wait set before
   // the colo joined, drops it, and opens the round.
-  test("records a colo but ends no wait in a pass where every class is in dry-run", async () => {
+  test("records a colo but ends no wait in a pass where every class is in observe mode", async () => {
     seedWait(wait("enam", 4, 3));
     await world.seed("scheduler-den", DEN, T0_MS);
     cls.where.set("scheduler-den", DEN);
     await setMode(world.handle(), {
       kind: "class",
       code: SCHEDULER,
-      mode: "dry_run",
+      mode: "observe",
       opId: "dry",
       atMs: T0_MS,
     });
-    const dry = await at(0);
-    expect(dry.failures).toEqual([
-      "dry-run - candidate colo DEN added, where a slot is registered, and every hint's wait left as it was: dry-run writes no pacing state",
+    const observed = await at(0);
+    expect(observed.failures).toEqual([
+      "observe - candidate colo DEN added, where a slot is registered, and every hint's wait left as it was: observe mode writes no pacing state",
     ]);
-    expect(dry.learnedColos).toEqual([]);
+    expect(observed.learnedColos).toEqual([]);
     expect(await readCandidateColos(world.handle())).toEqual([ORD, DEN]);
     expect(await waits()).toEqual([wait("enam", 4, 3)]);
 
@@ -419,21 +420,21 @@ describe("rounds", () => {
     expect(await readGaps(world.handle())).toEqual([]);
   });
 
-  // A fresh creator starts in dry-run with its slots registered and no wait
-  // anywhere, so recording their colos leaves nothing standing, and is no
+  // A fresh creator starts in observe mode with its slots registered and no
+  // wait anywhere, so recording their colos leaves nothing standing, and is no
   // failure: the failure list stays a signal during normal setup.
-  test("records a colo in dry-run with no failure while no wait stands", async () => {
+  test("records a colo in observe mode with no failure while no wait stands", async () => {
     await world.seed("scheduler-den", DEN, T0_MS);
     cls.where.set("scheduler-den", DEN);
     await setMode(world.handle(), {
       kind: "class",
       code: SCHEDULER,
-      mode: "dry_run",
+      mode: "observe",
       opId: "dry",
       atMs: T0_MS,
     });
-    const dry = await at(0);
-    expect(dry.failures).toEqual([]);
+    const observed = await at(0);
+    expect(observed.failures).toEqual([]);
     expect(await readCandidateColos(world.handle())).toEqual([ORD, DEN]);
     expect(world.lines).toContain(
       "[follow] candidate colo DEN added - a slot is registered there",

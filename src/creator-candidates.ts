@@ -31,9 +31,9 @@ export class PassCandidates {
   // The stored candidates, with every colo a slot is registered in: a slot is
   // an object that landed there, so its colo joins the first time a pass reads
   // it, and stays a candidate after the slot leaves, its gap reported. Adding
-  // one ends every hint's wait, which dry-run must not do, so a pass in which
-  // no class acts (`acts` false) adds the colo and leaves every wait as it
-  // was. While a wait stands (`waitsStand`) it reports that through `fail`,
+  // one ends every hint's wait, which observe mode must not do, so a pass in
+  // which no class acts (`acts` false) adds the colo and leaves every wait as
+  // it was. While a wait stands (`waitsStand`) it reports that through `fail`,
   // since the waits then do not know of the colo; with none, as on a fresh
   // creator's first passes, the add is an ordinary one.
   static async load(
@@ -59,7 +59,7 @@ export class PassCandidates {
         if (!(await candidates.record(colo, atMs, false))) continue;
         if (pass.waitsStand) {
           pass.fail(
-            `dry-run - candidate colo ${colo} added, where a slot is registered, and every hint's wait left as it was: dry-run writes no pacing state`,
+            `observe - candidate colo ${colo} added, where a slot is registered, and every hint's wait left as it was: observe mode writes no pacing state`,
           );
         } else {
           log(

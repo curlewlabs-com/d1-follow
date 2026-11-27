@@ -8,10 +8,10 @@
 //
 // The app supplies each class's calls and names and the databases; this owns
 // the decisions and their records. Observing and recording run in either mode,
-// except the pacing's state: a pass with every class in dry-run that adds a
-// candidate colo ends no hint's wait, and reports that as a failure while a
-// wait stands. Creating and releasing objects run only in act mode, and dry-run
-// logs what they would do.
+// except the pacing's state: a pass with every class in observe mode that adds
+// a candidate colo ends no hint's wait, and reports that as a failure while a
+// wait stands. Creating and releasing objects run only in act mode, and observe
+// mode logs what they would do.
 import { readLaneChangesAfter, readLaneHolders } from "./app-lane-reads";
 import type { Colo } from "./colo";
 import { readNewestCandidateAtMs } from "./candidate-store";
@@ -194,7 +194,7 @@ export interface CreatorPassReport {
   // Hints this pass added because the primary was seen in their region.
   readonly regionHintsAdded: readonly string[];
   // The region hints a class that acts probed through this pass, in
-  // regionHints' order; what dry-run would probe through is in its log.
+  // regionHints' order; what observe mode would probe through is in its log.
   readonly regionHintsProbed: readonly string[];
   // The colos the pass judged its gaps over: every candidate colo, and the
   // primary's colo while it is no candidate.
@@ -224,9 +224,9 @@ export interface CreatorPassReport {
   readonly spent: readonly ReportedObject[];
   readonly released: readonly ReportedObject[];
   readonly laneChangesCopied: number;
-  // What dry-run would have done: each class in dry-run that would have made
-  // a creation this pass, a probe or an attempt, and each name it would have
-  // resolved or released.
+  // What observe mode would have done: each class in observe mode that would
+  // have made a creation this pass, a probe or an attempt, and each name it
+  // would have resolved or released.
   readonly wouldCreate: readonly number[];
   readonly wouldRelease: readonly string[];
   // Calls that failed; each leaves its record to a later pass.
@@ -742,11 +742,11 @@ async function runLeasedPass(
       continue;
     }
     if (modes.modeOf("class", cls.code) !== "act") {
-      // Resolving acts on the object, so a class back in dry-run leaves its
-      // attempts open until it acts again.
+      // Resolving acts on the object, so a class back in observe mode leaves
+      // its attempts open until it acts again.
       unresolved.add(cls.code);
       report.wouldRelease.push(intent.name);
-      log(`[follow] ${cls.label} dry-run - would resolve ${intent.name}`);
+      log(`[follow] ${cls.label} observe - would resolve ${intent.name}`);
       continue;
     }
     const left = budget.get(cls.code) ?? 0;
@@ -922,7 +922,7 @@ async function runLeasedPass(
       }
       const note = waitNote();
       log(
-        `[follow] ${cls.label} dry-run - would ${held ? "resolve its open attempts first, then " : ""}probe through ${hints.length > 0 ? hints.join(",") : "no hint"}${due ? ` and attempt the gap in ${paced.colo}` : ""}${note === null ? "" : `; ${note}`}`,
+        `[follow] ${cls.label} observe - would ${held ? "resolve its open attempts first, then " : ""}probe through ${hints.length > 0 ? hints.join(",") : "no hint"}${due ? ` and attempt the gap in ${paced.colo}` : ""}${note === null ? "" : `; ${note}`}`,
       );
       continue;
     }
@@ -1087,13 +1087,12 @@ async function runLeasedPass(
 
   // A round with a usable answer, every one from a colo already a candidate,
   // doubles its hint's wait; a round with none leaves the wait as it was.
-  // Probes through a hint outside its round were made only for a young gap,
-  // and are no round. A wait the pass could not trust is dropped by any pass
-  // in which a class acts, whether or not one could probe; a pass with every
-  // class in dry-run writes none. A pass that added a colo deleted every wait
-  // in the batch that added it, and writes none. Each write is guarded on the
-  // lease, so a pass that lost it cannot put back a wait the next pass
-  // deleted.
+  // Probes through a hint outside its round were made only for a young gap, and
+  // are no round. A wait the pass could not trust is dropped by any pass in
+  // which a class acts, whether or not one could probe; a pass with every class
+  // in observe mode writes none. A pass that added a colo deleted every wait in
+  // the batch that added it, and writes none. Each write is guarded on the
+  // lease, so a pass that lost it cannot put back a wait the next pass deleted.
   const anyActs = config.classes.some(
     (c) => modes.modeOf("class", c.code) === "act",
   );
@@ -1141,7 +1140,7 @@ async function runLeasedPass(
     for (const pending of due) {
       if (modes.modeOf("class", cls.code) !== "act") {
         report.wouldRelease.push(pending.name);
-        log(`[follow] ${cls.label} dry-run - would release ${pending.name}`);
+        log(`[follow] ${cls.label} observe - would release ${pending.name}`);
         continue;
       }
       // Waiting in the release queue, but a call to it failed this pass and

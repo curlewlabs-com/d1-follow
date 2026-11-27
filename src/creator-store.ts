@@ -122,10 +122,10 @@ export const CREATOR_SQL = {
   clearBackoff: "DELETE FROM follow_backoff WHERE class_code = ?",
 } as const;
 
-export type Mode = "dry_run" | "act";
+export type Mode = "observe" | "act";
 export type SubjectKind = "class" | "lane";
 
-const MODE_CODE: Readonly<Record<Mode, number>> = { dry_run: 1, act: 2 };
+const MODE_CODE: Readonly<Record<Mode, number>> = { observe: 1, act: 2 };
 const SUBJECT_KIND_CODE: Readonly<Record<SubjectKind, number>> = {
   class: 1,
   lane: 2,
@@ -545,8 +545,8 @@ export function returnedRows(result: unknown, statement: string): unknown[] {
 }
 
 export interface ModeTable {
-  // A class or lane with no row is in dry-run: nothing acts until a mode is
-  // set.
+  // A class or lane with no row is in observe mode: nothing acts until a mode
+  // is set.
   modeOf(kind: SubjectKind, code: number): Mode;
 }
 
@@ -561,14 +561,14 @@ export async function readModes(db: SqlDatabase): Promise<ModeTable> {
   }
   return {
     modeOf: (kind, code) =>
-      modes.get(`${SUBJECT_KIND_CODE[kind]}:${code}`) ?? "dry_run",
+      modes.get(`${SUBJECT_KIND_CODE[kind]}:${code}`) ?? "observe",
   };
 }
 
 function modeField(row: unknown): Mode {
   const code = integerField(row, "mode");
   if (code === MODE_CODE.act) return "act";
-  if (code === MODE_CODE.dry_run) return "dry_run";
+  if (code === MODE_CODE.observe) return "observe";
   throw new CreatorStoreError(`mode is not a mode code: ${code}`);
 }
 
@@ -579,10 +579,10 @@ export interface ModeChange {
 
 // A lane's newest mode changes from the ledger, at most `limit`, oldest first:
 // the mode table says what a lane's mode is, and only these say what it was.
-// With no row, it never left dry-run. The ledger keeps them for the life of the
-// environment, so the caller says how far back it needs to reach; a caller
-// asking what the mode was at an instant older than every row returned does
-// not know, and must not read that as dry-run having been proved.
+// With no row, it never left observe mode. The ledger keeps them for the life
+// of the environment, so the caller says how far back it needs to reach; a
+// caller asking what the mode was at an instant older than every row returned
+// does not know, and must not read that as observe mode having been proved.
 export async function readLaneModeChanges(
   db: SqlDatabase,
   laneCode: number,
