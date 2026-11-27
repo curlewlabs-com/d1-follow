@@ -705,6 +705,33 @@ describe("fenced by the lease", () => {
     expect(await waits()).toEqual([]);
   });
 
+  // The risk this guards: the stamp of a slot the pass has just registered
+  // fails, and the pass, not counting the slot, takes its colo for a gap
+  // still open, records it again and places a second base slot there. The
+  // slot is held once registered, so the next landing there is spent.
+  test("holds a registered slot whose stamp failed, and spends the next landing there", async () => {
+    seedHint("weur");
+    world.candidate(IAD, T0_MS - 48 * HOUR_MS);
+    const filling = scriptedClass([ORD], { enam: [IAD], weur: [IAD] });
+    filling.where.set("scheduler-ord", ORD);
+    let batches = 0;
+    world.afterBatch = () => {
+      if (filling.placed.length !== 1) return;
+      batches++;
+      if (batches === 2) throw new Error("stamp lost");
+    };
+    const report = await at(0, [filling]);
+    expect(report.failures).toEqual([
+      "create scheduler-test-enam-1: stamp lost",
+    ]);
+    expect(report.spent.map((o) => o.colo)).toEqual([IAD]);
+    const iad = world.creator
+      .query("SELECT name FROM follow_slot WHERE colo = 'IAD'")
+      .all();
+    expect(iad).toEqual([{ name: "scheduler-test-enam-1" }]);
+    expect(await readGaps(world.handle())).toEqual([]);
+  });
+
   // A probe whose call was never made is no probe: a pass that loses its
   // lease before making one reports none.
   test("reports no probe a pass lost its lease before making", async () => {

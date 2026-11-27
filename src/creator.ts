@@ -629,17 +629,19 @@ async function runLeasedPass(
       registeredAtMs: atMs,
       verifiedAtMs: null,
     };
-    // The gap this object fills: the class's missing slot in the colo, or its
-    // shortfall of spares there once this is the last spare it keeps. Its
-    // record goes in the batch that registers the object, so a pass that
-    // stops after the registration leaves no record of a gap it filled.
+    // The record this object ends, which goes in the batch that registers
+    // it, so a pass that stops after the registration leaves none standing.
+    // A base slot ends any record in its colo: the class had no slot there,
+    // so a record of its spares there is of a gap that changed kind when the
+    // slot was lost, and a record of the missing slot is of the gap it
+    // fills. A spare ends the record of the shortfall once it is the last
+    // spare the class keeps.
     const filled = gapRecords.get(gapKey(cls.code, colo));
     const retired =
       filled !== undefined &&
-      (role === "base"
-        ? filled.kind === "slot"
-        : filled.kind === "spares" &&
-          (occupied.get(cls.code) ?? 0) + 1 >= cls.spares)
+      (role === "base" ||
+        (filled.kind === "spares" &&
+          (occupied.get(cls.code) ?? 0) + 1 >= cls.spares))
         ? filled
         : undefined;
     let alongside: readonly unknown[];
@@ -688,9 +690,15 @@ async function runLeasedPass(
       log(`[follow] ${cls.label} spare ${name} created in ${colo}`);
       return;
     }
-    const stamped = await stampVerified(db, { name, colo, opId, atMs });
-    registry.set(name, { ...slot, verifiedAtMs: stamped ? atMs : null });
+    // Held once registered, before its stamp, as a spare is counted: a stamp
+    // that fails must not leave the pass taking the colo for a gap, or a
+    // later creation this pass would record that gap again and place a
+    // second base slot there.
+    registry.set(name, slot);
     held.set(cls.code, (held.get(cls.code) ?? new Set<Colo>()).add(colo));
+    if (await stampVerified(db, { name, colo, opId, atMs })) {
+      registry.set(name, { ...slot, verifiedAtMs: atMs });
+    }
     report.created.push({ classCode: cls.code, name, colo });
     log(`[follow] ${cls.label} slot ${name} created in ${colo}`);
   };

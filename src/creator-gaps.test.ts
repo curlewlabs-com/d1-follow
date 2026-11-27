@@ -472,6 +472,38 @@ describe("the gap's record", () => {
     expect(await gaps()).toEqual([gap(MIA, 1, 1, "spares")]);
   });
 
+  // The risk this guards: the base slot beside the primary is lost while
+  // its spares were short, and a lost answer resolved this pass restores it
+  // before the class's turn. The shortfall's old record is of a gap that
+  // changed kind when the slot was lost, so the registration that restores
+  // the slot ends it, and the remaining shortfall is a new gap.
+  test("ends an old shortfall's record when resolving an intent restores the slot", async () => {
+    world.primary = { colo: ORD, region: "ENAM" };
+    seedGap(gap(ORD, -48, -47, "spares"));
+    world.creator
+      .query("DELETE FROM follow_slot WHERE name = 'scheduler-ord'")
+      .run();
+    world.creator
+      .query("DELETE FROM follow_slot_name WHERE name = 'scheduler-ord'")
+      .run();
+    world.creator
+      .query(
+        "INSERT INTO follow_open_intent (op_id, class_code, name, at_ms) VALUES ('op-lost', ?, 'scheduler-test-enam-9', ?)",
+      )
+      .run(SCHEDULER, T0_MS - HOUR_MS);
+    const withSpares: ScriptedClass = { ...cls, spares: 2 };
+    withSpares.where.set("scheduler-test-enam-9", ORD);
+    world.clock = T0_MS + HOUR_MS;
+    const report = await world.pass(withSpares, {
+      attemptsPerClassPerPass: 1,
+      laneCodes: [],
+    });
+    expect(report.created.map((o) => o.name)).toEqual([
+      "scheduler-test-enam-9",
+    ]);
+    expect(await gaps()).toEqual([gap(ORD, 1, null, "spares")]);
+  });
+
   // A filled gap's record is deleted in the batch that registers the slot
   // filling it, guarded on the lease: a pass that lost its lease just before
   // that batch deletes nothing the pass now holding the lease relies on, and
