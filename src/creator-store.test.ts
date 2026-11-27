@@ -9,7 +9,6 @@ import { CREATOR_APP_SQL } from "./app-lane-reads";
 import { takeCensus } from "./census";
 import { sqliteHandle } from "./sqlite-test-handle";
 import { CANDIDATE_SQL } from "./candidate-store";
-import { GAP_SQL } from "./gap-store";
 import { HINT_WAIT_SQL } from "./hint-wait-store";
 import {
   LANE_TARGET_SQL,
@@ -819,7 +818,6 @@ describe("query plans", () => {
     Object.entries({
       ...CREATOR_SQL,
       ...CANDIDATE_SQL,
-      ...GAP_SQL,
       ...HINT_WAIT_SQL,
       ...LANE_TARGET_SQL,
       ...SPARE_SQL,

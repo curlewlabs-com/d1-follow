@@ -190,49 +190,21 @@ CREATE TABLE IF NOT EXISTS follow_hint_wait (
   -- The hint as the pass hands it to the app's calls, the app's own included,
   -- so it takes whatever form the app's configuration gives it.
   region_hint TEXT PRIMARY KEY CHECK (length(region_hint) > 0),
-  -- Each time is held to the integers a pass reads exactly, as follow_gap's
-  -- are, so no row can stop the pass that reads it (src/creator-hints.ts drops
-  -- a wait it cannot trust).
+  -- Each time is held to the integers a pass reads exactly, so no row can stop
+  -- the pass that reads it (src/creator-hints.ts drops a wait it cannot trust).
   wait_ms INTEGER NOT NULL CHECK (wait_ms BETWEEN 1 AND 9007199254740991),
   -- When the next round is due: the start of the pass that set the wait, plus
   -- the wait.
   due_at_ms INTEGER NOT NULL CHECK (due_at_ms BETWEEN 0 AND 9007199254740991)
 ) STRICT;
 
--- Each class's wait before attempting a gap in the primary's colo again, as
--- builds before follow_gap paced those attempts. No pass reads or writes it now.
--- It stays because a schema change here is additive only, and an older build
--- deployed again reads it as before.
+-- A class whose attempts at a gap in the primary's colo found nothing to fill
+-- waits before attempting there again, the wait doubling up to a cap. No row
+-- means no wait.
 CREATE TABLE IF NOT EXISTS follow_backoff (
   class_code INTEGER PRIMARY KEY CHECK (class_code > 0),
   wait_ms INTEGER NOT NULL CHECK (wait_ms > 0),
   next_attempt_at_ms INTEGER NOT NULL
-) STRICT;
-
--- The gaps a pass has made a creation for (README sec."The creator: making and
--- keeping slots"), which pace the attempts at the gap in the primary's colo,
--- and keep a young gap's class probing through every hint. A class has a gap
--- in each candidate colo where it has no slot, and in the primary's colo while
--- it has no slot there or fewer spares than it keeps. A gap no pass has created
--- for has no row. A pass deletes the row once it sees the gap filled, gone, or
--- of another kind, so a gap that returns, or a lost slot where only spares were
--- short, is a new one.
-CREATE TABLE IF NOT EXISTS follow_gap (
-  class_code INTEGER NOT NULL CHECK (class_code > 0),
-  colo TEXT NOT NULL CHECK (colo GLOB '[A-Z][A-Z][A-Z]'),
-  -- 1 the class has no slot in the colo, 2 it has its slot there and fewer
-  -- spares than it keeps, which is a gap only in the primary's colo.
-  kind INTEGER NOT NULL CHECK (kind IN (1, 2)),
-  -- When the pass that made the gap's first creation began. Each time is held
-  -- to the integers a pass reads exactly, so no row can stop the pass that
-  -- reads it (src/creator-gaps.ts drops a record it cannot trust).
-  begun_at_ms INTEGER NOT NULL CHECK (begun_at_ms BETWEEN 0 AND 9007199254740991),
-  -- When the pass that last attempted the gap through the hint for the
-  -- primary's region began; null while none has since the row began.
-  attempted_at_ms INTEGER CHECK (
-    attempted_at_ms IS NULL OR attempted_at_ms BETWEEN 0 AND 9007199254740991
-  ),
-  PRIMARY KEY (class_code, colo)
 ) STRICT;
 
 -- The creator's pass lease: one pass at a time, so overlapping invocations never

@@ -30,44 +30,21 @@ export class PassCandidates {
 
   // The stored candidates, with every colo a slot is registered in: a slot is
   // an object that landed there, so its colo joins the first time a pass reads
-  // it, and stays a candidate after the slot leaves, its gap reported. Adding
-  // one ends every hint's wait, which observe mode must not do, so a pass in
-  // which no class acts (`acts` false) adds the colo and leaves every wait as
-  // it was. While a wait stands (`waitsStand`) it reports that through `fail`,
-  // since the waits then do not know of the colo; with none, as on a fresh
-  // creator's first passes, the add is an ordinary one.
+  // it, in either mode, and stays a candidate after the slot leaves, its gap
+  // reported.
   static async load(
     db: SqlDatabase,
     holder: string,
     registered: Iterable<Colo>,
-    pass: {
-      readonly atMs: number;
-      readonly acts: boolean;
-      readonly waitsStand: boolean;
-      readonly log: (line: string) => void;
-      readonly fail: (line: string) => void;
-    },
+    atMs: number,
+    log: (line: string) => void,
   ): Promise<PassCandidates> {
-    const { atMs, log } = pass;
     const candidates = new PassCandidates(
       db,
       holder,
       await readCandidateColos(db),
     );
     for (const colo of new Set(registered)) {
-      if (!pass.acts) {
-        if (!(await candidates.record(colo, atMs, false))) continue;
-        if (pass.waitsStand) {
-          pass.fail(
-            `observe - candidate colo ${colo} added, where a slot is registered, and every hint's wait left as it was: observe mode writes no pacing state`,
-          );
-        } else {
-          log(
-            `[follow] candidate colo ${colo} added - a slot is registered there`,
-          );
-        }
-        continue;
-      }
       if (await candidates.add(colo, atMs)) {
         log(
           `[follow] candidate colo ${colo} added - a slot is registered there`,
@@ -88,21 +65,11 @@ export class PassCandidates {
   // and lost its answer has deleted every wait, which this pass must then
   // not write again.
   async add(colo: Colo | null, atMs: number): Promise<boolean> {
-    return await this.record(colo, atMs, true);
-  }
-
-  // Adds `colo`, ending every hint's wait only with `endWaits`; true when it
-  // joined.
-  private async record(
-    colo: Colo | null,
-    atMs: number,
-    endWaits: boolean,
-  ): Promise<boolean> {
     if (colo === null || this.colos.includes(colo)) {
       return false;
     }
-    if (endWaits) this.added = true;
-    if (!(await addCandidateColo(this.db, colo, atMs, this.holder, endWaits))) {
+    this.added = true;
+    if (!(await addCandidateColo(this.db, colo, atMs, this.holder))) {
       throw new LeaseLost();
     }
     this.colos.push(colo);

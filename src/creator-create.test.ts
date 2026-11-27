@@ -1,12 +1,11 @@
 // The creator's creations: the probe each pass makes and what it learns, the
-// attempts at a gap beside the primary with their bound (their pacing is
-// creator-gaps.test.ts's), the region hints, and resolving an attempt whose
-// answer was lost, in the world creator-test-harness.ts sets up.
+// attempts at a gap beside the primary with their bound and backoff, the
+// region hints, and resolving an attempt whose answer was lost, in the world
+// creator-test-harness.ts sets up.
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { CreatorClass } from "./creator";
 import { readCandidateColos, readRegionHints } from "./candidate-store";
-import { readOpenIntents } from "./creator-store";
-import { readGaps } from "./gap-store";
+import { readBackoff, readOpenIntents } from "./creator-store";
 import {
   AMS,
   CreatorWorld,
@@ -152,6 +151,66 @@ describe("the primary's gap", () => {
     expect(report.spent).toHaveLength(5);
     expect(report.created).toEqual([]);
   });
+
+  // A primary colo the hint seldom reaches costs a few attempts a day, not a
+  // stream: a fruitless pass waits, the wait doubles, and the gap filling
+  // resets it. The probe runs every pass regardless.
+  test("backs off while attempts at it fill nothing, and resets once filled", async () => {
+    await world.act();
+    world.primary = { colo: MIA, region: "ENAM" };
+    await world.seed("scheduler-ord", ORD, T0_MS);
+    const ords = Array.from({ length: 11 }, () => ORD);
+    const cls = scriptedClass([...ords, MIA]);
+    cls.where.set("scheduler-ord", ORD);
+    const first = await world.pass(cls);
+    expect(first.spent).toHaveLength(5);
+    expect((await readBackoff(world.handle())).get(SCHEDULER)?.waitMs).toBe(
+      2 * HOUR_MS,
+    );
+
+    world.clock += HOUR_MS;
+    const waiting = await world.pass(cls);
+    expect(waiting.spent).toHaveLength(1);
+
+    // The wait over, attempts find nothing again, and it doubles.
+    world.clock += HOUR_MS;
+    await world.pass(cls);
+    expect((await readBackoff(world.handle())).get(SCHEDULER)?.waitMs).toBe(
+      4 * HOUR_MS,
+    );
+
+    world.clock += 4 * HOUR_MS;
+    const filled = await world.pass(cls);
+    expect(filled.created.map((o) => o.name)).toEqual([
+      "scheduler-test-enam-12",
+    ]);
+    expect(await readBackoff(world.handle())).toEqual(new Map());
+  });
+
+  // The wait is about reaching one colo. A pass that cannot read where the
+  // primary is knows nothing about that colo and leaves the wait; one that
+  // finds the primary beside a slot of the class has no gap to wait on, so a
+  // later gap starts without the old wait.
+  test("keeps the wait through an unread primary, and drops it with no gap", async () => {
+    await world.act();
+    world.primary = { colo: MIA, region: "ENAM" };
+    await world.seed("scheduler-ord", ORD, T0_MS);
+    const cls = scriptedClass(Array.from({ length: 7 }, () => ORD));
+    cls.where.set("scheduler-ord", ORD);
+    await world.pass(cls);
+    const wait = (await readBackoff(world.handle())).get(SCHEDULER);
+    expect(wait?.waitMs).toBe(2 * HOUR_MS);
+
+    world.clock += HOUR_MS;
+    world.primary = "fails";
+    await world.pass(cls);
+    expect((await readBackoff(world.handle())).get(SCHEDULER)).toEqual(wait);
+
+    world.clock += HOUR_MS;
+    world.primary = { colo: ORD, region: "ENAM" };
+    await world.pass(cls);
+    expect(await readBackoff(world.handle())).toEqual(new Map());
+  });
 });
 
 describe("region hints", () => {
@@ -199,9 +258,8 @@ describe("region hints", () => {
 
   // A primary whose region names no hint gives no hint to attempt its gap
   // through. Attempting through the app's own would be a guess that spends
-  // the budget; the probe still runs. The record the probe begins has no
-  // attempt, so it does not age the gap for the attempts: they start it over
-  // once a hint can reach it (creator-gaps.test.ts).
+  // the budget, and a wait it set would hold back the right hint later; the
+  // probe still runs.
   test("attempts no gap beside a primary whose region names no hint", async () => {
     await world.act();
     world.primary = { colo: DEN, region: "MARS" };
@@ -211,15 +269,7 @@ describe("region hints", () => {
     const report = await world.pass(cls);
     expect(report.spent.map((o) => o.name)).toEqual(["scheduler-test-enam-1"]);
     expect(report.gaps).toEqual([{ classCode: SCHEDULER, colo: DEN }]);
-    expect(await readGaps(world.handle())).toEqual([
-      {
-        classCode: SCHEDULER,
-        colo: DEN,
-        kind: "slot",
-        begunAtMs: T0_MS,
-        attemptedAtMs: null,
-      },
-    ]);
+    expect(await readBackoff(world.handle())).toEqual(new Map());
   });
 
   // The primary read is the pass's first call on the app database; a failure
@@ -421,7 +471,7 @@ describe("attempts", () => {
     };
     await world.pass(down, { attemptsPerClassPerPass: 2 });
     for (let n = 0; n < 3; n++) {
-      // Past any gap's wait, with room in the budget for new attempts.
+      // Past any backoff, with room in the budget for new attempts.
       world.clock += 24 * HOUR_MS;
       calls = 0;
       await world.pass(down, { attemptsPerClassPerPass: 4 });

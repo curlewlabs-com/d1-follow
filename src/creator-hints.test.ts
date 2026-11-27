@@ -1,7 +1,6 @@
 // How the pass paces its probes through each region hint: in the hint's
 // rounds, whose wait doubles while they teach nothing; on every pass while the
-// class has a young gap; and every wait ended by a creation that lands in a
-// new colo. In the world creator-test-harness.ts sets up, with hourly passes
+// class has a gap; and every wait ended by a colo that joins the candidates. In the world creator-test-harness.ts sets up, with hourly passes
 // and a cap of a day.
 import { beforeEach, describe, expect, test } from "bun:test";
 import { readCandidateColos } from "./candidate-store";
@@ -21,7 +20,6 @@ import {
   scriptedClass,
   type ScriptedClass,
 } from "./creator-test-harness";
-import { readGaps } from "./gap-store";
 import { readHintWaits, type HintWait } from "./hint-wait-store";
 
 const WORKER = 2;
@@ -136,7 +134,7 @@ describe("rounds", () => {
   // Between rounds the pass probes through nothing, but its report still
   // lists the hints the creator holds, and its log says when the next round
   // is due.
-  test("probes through no waiting hint for a class with no young gap", async () => {
+  test("probes through no waiting hint for a class with no gap", async () => {
     await at(0);
     const waiting = await at(1);
     expect(waiting.regionHints).toEqual(["enam"]);
@@ -311,15 +309,15 @@ describe("rounds", () => {
     ]);
   });
 
-  // With every class in observe mode nothing is probed, so nothing moves the
-  // wait, a wait the pass could not trust included.
-  test("writes no wait in a pass where every class is in observe mode", async () => {
-    seedWait(wait("enam", 48, 0));
+  // With every class in observe mode nothing is probed, so a round passes
+  // with no probe and doubles no wait.
+  test("doubles no wait in a pass where every class is in observe mode", async () => {
+    seedWait(wait("enam", 4, 0));
     await setMode(world.handle(), {
       kind: "class",
       code: SCHEDULER,
       mode: "observe",
-      opId: "dry",
+      opId: "observe",
       atMs: T0_MS,
     });
     const report = await at(0);
@@ -328,15 +326,14 @@ describe("rounds", () => {
     expect(world.lines).toContain(
       "[follow] scheduler observe - would probe through enam",
     );
-    expect(await waits()).toEqual([wait("enam", 48, 0)]);
+    expect(await waits()).toEqual([wait("enam", 4, 0)]);
   });
 
-  // Observe mode writes none of the pacing's state. A pass in which no class
-  // acts still records a registered slot's colo as a candidate, so the colo is
-  // not lost if the slot then leaves, but it ends no wait, and says so as a
-  // failure. The first pass in which a class acts finds each wait set before
-  // the colo joined, drops it, and opens the round.
-  test("records a colo but ends no wait in a pass where every class is in observe mode", async () => {
+  // The creator's own records stay current in either mode: a registered
+  // slot's colo joins the candidates in a pass in which no class acts, and,
+  // as any added colo does, ends every hint's wait, so the waits never stand
+  // on rounds that did not know of it.
+  test("ends every wait on a colo added in a pass where every class is in observe mode", async () => {
     seedWait(wait("enam", 4, 3));
     await world.seed("scheduler-den", DEN, T0_MS);
     cls.where.set("scheduler-den", DEN);
@@ -344,28 +341,41 @@ describe("rounds", () => {
       kind: "class",
       code: SCHEDULER,
       mode: "observe",
-      opId: "dry",
+      opId: "observe",
       atMs: T0_MS,
     });
     const observed = await at(0);
-    expect(observed.failures).toEqual([
-      "observe - candidate colo DEN added, where a slot is registered, and every hint's wait left as it was: observe mode writes no pacing state",
-    ]);
-    expect(observed.learnedColos).toEqual([]);
+    expect(observed.failures).toEqual([]);
     expect(await readCandidateColos(world.handle())).toEqual([ORD, DEN]);
-    expect(await waits()).toEqual([wait("enam", 4, 3)]);
+    expect(world.lines).toContain(
+      "[follow] candidate colo DEN added - a slot is registered there",
+    );
+    expect(await waits()).toEqual([]);
+  });
 
-    await world.act();
-    const acting = await at(1);
-    expect(acting.failures).toEqual([]);
-    expect(acting.regionHintsProbed).toEqual(["enam"]);
-    expect(await waits()).toEqual([wait("enam", 2, 3)]);
+  // The risk this guards: a wait the pass cannot trust standing through
+  // every pass a class spends in observe mode, so the class's first acting
+  // pass is held back by it. It is dropped whatever the mode.
+  test("drops a wait it cannot trust in a pass where every class is in observe mode", async () => {
+    seedWait(wait("enam", 48, 1));
+    await setMode(world.handle(), {
+      kind: "class",
+      code: SCHEDULER,
+      mode: "observe",
+      opId: "observe",
+      atMs: T0_MS,
+    });
+    await at(0);
+    expect(await waits()).toEqual([]);
+    expect(world.lines).toContain(
+      "[follow] region hint enam's wait cannot be trusted - deleted",
+    );
   });
 
   // The risk this guards: a wait of a hint the creator no longer probes
   // through, such as an app hint the configuration has since changed,
   // standing until that hint comes back and then holding back its first
-  // round. A pass in which a class acts deletes it.
+  // round. A pass deletes it, in either mode.
   test("deletes the wait of a hint the creator no longer holds", async () => {
     seedWait(wait("wnam", 4, 3));
     await at(0);
@@ -375,69 +385,22 @@ describe("rounds", () => {
     );
   });
 
-  // A creation whose intent could not be written was never made, so it
-  // begins no gap's record: the gap stays one no pass has created for.
-  test("begins no gap record for a creation whose intent was not written", async () => {
-    world.primary = { colo: MIA, region: "ENAM" };
-    const nameless: ScriptedClass = {
-      ...cls,
-      nameOf: () => {
-        throw new Error("no name");
-      },
-    };
-    await expect(at(0, [nameless])).rejects.toThrow("no name");
-    expect(await readGaps(world.handle())).toEqual([]);
-  });
-
-  // The risk this guards: a pass stopping after a creation filled a gap but
-  // before the class's turn ended would leave the gap's old record, so the
-  // gap, reopened later, would start old. The creation settles the record at
-  // once.
-  test("deletes a gap's record as soon as a creation fills it", async () => {
-    seedHint("weur");
-    world.candidate(IAD, T0_MS - 48 * HOUR_MS);
-    world.creator
-      .query(
-        "INSERT INTO follow_gap (class_code, colo, kind, begun_at_ms, attempted_at_ms) VALUES (?, 'IAD', 1, ?, NULL)",
-      )
-      .run(SCHEDULER, T0_MS - 48 * HOUR_MS);
-    const filling = scriptedClass([ORD], { enam: [IAD], weur: [ORD] });
-    filling.where.set("scheduler-ord", ORD);
-    const stopping: ScriptedClass = {
-      ...filling,
-      observe: async (name, hint) => {
-        if (hint === "weur") {
-          world.creator
-            .query("UPDATE follow_pass SET holder = 'next-pass'")
-            .run();
-        }
-        return await filling.observe(name, hint);
-      },
-    };
-    const report = await at(0, [stopping]);
-    expect(report.created.map((o) => o.colo)).toEqual([IAD]);
-    expect(report.leaseLost).toBe(true);
-    expect(await readGaps(world.handle())).toEqual([]);
-  });
-
-  // A fresh creator starts in observe mode with its slots registered and no
-  // wait anywhere, so recording their colos leaves nothing standing, and is no
-  // failure: the failure list stays a signal during normal setup.
-  test("records a colo in observe mode with no failure while no wait stands", async () => {
-    await world.seed("scheduler-den", DEN, T0_MS);
-    cls.where.set("scheduler-den", DEN);
+  // The same stale wait would otherwise outlast every pass a class spends in
+  // observe mode, and hold back that hint's first round if it comes back
+  // before a class acts. It is deleted whatever the mode.
+  test("deletes the wait of a hint the creator no longer holds in a pass where every class is in observe mode", async () => {
+    seedWait(wait("wnam", 4, 3));
     await setMode(world.handle(), {
       kind: "class",
       code: SCHEDULER,
       mode: "observe",
-      opId: "dry",
+      opId: "observe",
       atMs: T0_MS,
     });
-    const observed = await at(0);
-    expect(observed.failures).toEqual([]);
-    expect(await readCandidateColos(world.handle())).toEqual([ORD, DEN]);
+    await at(0);
+    expect(await waits()).toEqual([]);
     expect(world.lines).toContain(
-      "[follow] candidate colo DEN added - a slot is registered there",
+      "[follow] region hint wnam's wait deleted - the creator no longer probes through it",
     );
   });
 
@@ -520,9 +483,9 @@ describe("a cap lowered to one pass and raised again", () => {
 });
 
 describe("a cap lowered while no class can probe", () => {
-  // A wait longer than a lowered cap is dropped by a pass in which a class
-  // acts, even one whose open attempt keeps it from probing, so raising the
-  // cap again once the attempt resolves does not revive the old wait.
+  // A wait longer than a lowered cap is dropped by a pass in which no class
+  // can probe, here one whose open attempt keeps it from probing, so raising
+  // the cap again once the attempt resolves does not revive the old wait.
   test("drops the wait, and the restored cap starts from none", async () => {
     const lost: ScriptedClass = {
       ...cls,
@@ -708,8 +671,8 @@ describe("fenced by the lease", () => {
 
   // The risk this guards: the stamp of a slot the pass has just registered
   // fails, and the pass, not counting the slot, takes its colo for a gap
-  // still open, records it again and places a second base slot there. The
-  // slot is held once registered, so the next landing there is spent.
+  // still open and places a second base slot there. The slot is held once
+  // registered, so the next landing there is spent.
   test("holds a registered slot whose stamp failed, and spends the next landing there", async () => {
     seedHint("weur");
     world.candidate(IAD, T0_MS - 48 * HOUR_MS);
@@ -730,7 +693,6 @@ describe("fenced by the lease", () => {
       .query("SELECT name FROM follow_slot WHERE colo = 'IAD'")
       .all();
     expect(iad).toEqual([{ name: "scheduler-test-enam-1" }]);
-    expect(await readGaps(world.handle())).toEqual([]);
   });
 
   // A probe whose call was never made is no probe: a pass that loses its
@@ -754,10 +716,10 @@ describe("fenced by the lease", () => {
   });
 });
 
-describe("a young gap", () => {
-  // A gap keeps its class probing through every hint on every pass for its
-  // first day, whatever the hints' waits. Those probes are no round: they
-  // leave the wait as it was.
+describe("a gap", () => {
+  // A class with a gap probes through every hint on every pass, as it did
+  // before the hints were paced, whatever their waits. Those probes are no
+  // round: they leave the wait as it was.
   test("probes through a waiting hint without moving its wait", async () => {
     seedWait(wait("enam", 4, 3));
     world.primary = { colo: MIA, region: "ENAM" };
@@ -768,30 +730,84 @@ describe("a young gap", () => {
     expect(report.regionHintsProbed).toEqual(["enam"]);
     expect(report.spent.map((o) => o.colo)).toEqual([ORD]);
     expect(await waits()).toEqual([wait("enam", 4, 3)]);
-    expect(await readGaps(world.handle())).toEqual([
-      {
-        classCode: SCHEDULER,
-        colo: MIA,
-        kind: "slot",
-        begunAtMs: T0_MS,
-        attemptedAtMs: null,
-      },
-    ]);
   });
 
-  // A gap the probes have not filled in a day is old, and its class probes
-  // only in the hints' rounds, as one with no gap does.
-  test("probes only in the hint's round once old", async () => {
-    world.primary = { colo: MIA, region: "MARS" };
-    const probedAt = async (hours: number): Promise<readonly string[]> => {
-      world.clock = T0_MS + hours * HOUR_MS;
-      return (await world.pass(cls, { laneCodes: [] })).regionHintsProbed;
-    };
-    for (let hour = 0; hour < 24; hour++) {
-      expect(await probedAt(hour)).toEqual(["enam"]);
+  // The gap is read as the pass stands before each probe, so a probe that
+  // fills the class's last gap sends no more probes through hints outside
+  // their rounds.
+  test("probes no further outside the rounds once a probe fills the last gap", async () => {
+    seedHint("weur");
+    seedWait(wait("enam", 4, 3));
+    seedWait(wait("weur", 4, 3));
+    world.candidate(IAD, T0_MS - 48 * HOUR_MS);
+    const filling = scriptedClass([ORD], { enam: [IAD], weur: [ORD] });
+    filling.where.set("scheduler-ord", ORD);
+    const report = await at(0, [filling]);
+    expect(report.created.map((o) => o.colo)).toEqual([IAD]);
+    expect(report.regionHintsProbed).toEqual(["enam"]);
+    expect(await waits()).toEqual([wait("enam", 4, 3), wait("weur", 4, 3)]);
+  });
+
+  // A pass that cannot read where the primary is judges the gap over the
+  // candidate colos alone, and attempts nothing beside the primary, since it
+  // cannot say which colo the attempts are for.
+  test("is judged over the candidate colos alone while the primary is unreadable", async () => {
+    seedWait(wait("enam", 4, 3));
+    world.primary = "fails";
+    expect((await at(0)).regionHintsProbed).toEqual([]);
+
+    world.candidate(IAD, T0_MS - 48 * HOUR_MS);
+    const report = await at(1);
+    expect(report.regionHintsProbed).toEqual(["enam"]);
+    expect(report.spent.map((o) => o.name)).toEqual(["scheduler-test-enam-1"]);
+    expect(await waits()).toEqual([wait("enam", 4, 3)]);
+  });
+
+  // A class in observe mode with a gap would probe through every hint, and
+  // says so, beside one that acts with none, which probes only in the rounds.
+  test("in observe mode, would probe through every hint", async () => {
+    seedWait(wait("enam", 4, 3));
+    world.candidate(IAD, T0_MS - 48 * HOUR_MS);
+    await world.seed("scheduler-iad", IAD, T0_MS);
+    cls.where.set("scheduler-iad", IAD);
+    const observed = await worker([ORD], "observe");
+    const report = await at(0, [cls, observed]);
+    expect(report.regionHintsProbed).toEqual([]);
+    expect(report.wouldCreate).toEqual([WORKER]);
+    expect(world.lines).toContain(
+      "[follow] worker observe - would probe through enam",
+    );
+  });
+});
+
+// Rule P5 of the pacing: no state of the creator costs more than the build
+// before the hints were paced. The risk this guards is the pacing reaching a
+// class with a gap, which it must not slow, or a class with none spending
+// more than its rounds.
+describe("the bound", () => {
+  // With a gap beside the primary that no creation fills, every pass probes
+  // through every hint and attempts the gap on the doubling wait, as that
+  // build did: the names each pass takes are its, hour by hour.
+  test("with a gap, makes the creations the unpaced loop makes", async () => {
+    seedHint("weur");
+    world.primary = { colo: MIA, region: "ENAM" };
+    const taken: number[] = [];
+    for (let hour = 0; hour <= 14; hour++) {
+      const report = await at(hour);
+      expect(report.regionHintsProbed).toEqual(["enam", "weur"]);
+      taken.push(report.spent.length + report.created.length);
     }
-    expect(await probedAt(24)).toEqual([]);
-    expect(await probedAt(30)).toEqual(["enam"]);
-    expect(await probedAt(31)).toEqual([]);
+    expect(taken).toEqual([6, 2, 6, 2, 2, 2, 6, 2, 2, 2, 2, 2, 2, 2, 6]);
+  });
+
+  // With no gap, a pass makes only the probes of the hints in their round,
+  // and no attempt.
+  test("with none, makes only the probes of the hints in their round", async () => {
+    seedHint("weur");
+    seedWait(wait("weur", 4, 3));
+    const report = await at(0);
+    expect(report.regionHintsProbed).toEqual(["enam"]);
+    expect(report.spent.map((o) => o.name)).toEqual(["scheduler-test-enam-1"]);
+    expect(report.created).toEqual([]);
   });
 });

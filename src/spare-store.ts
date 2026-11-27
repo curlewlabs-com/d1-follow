@@ -8,10 +8,8 @@ import {
   ledgerStatement,
   returnedRows,
   slotFromRow,
-  type RegistrationRecord,
   type Slot,
   type SqlDatabase,
-  type SqlStatement,
 } from "./creator-store";
 import type { Colo } from "./colo";
 import { holdIdentity, releaseIdentity } from "./slot-identity";
@@ -61,21 +59,9 @@ export async function readSpares(db: SqlDatabase): Promise<Slot[]> {
 export async function registerSpare(
   db: SqlDatabase,
   spare: Slot,
-  record: RegistrationRecord,
+  record: { readonly opId: string; readonly kind: "created" | "seeded" },
 ): Promise<void> {
-  await registerSpareWith(db, spare, record, []);
-}
-
-// registerSpare, with `alongside` committed in the same batch, as
-// registerSlotWith's. The creator's pass uses it; the package exports
-// registerSpare alone.
-export async function registerSpareWith(
-  db: SqlDatabase,
-  spare: Slot,
-  record: RegistrationRecord,
-  alongside: readonly SqlStatement[],
-): Promise<readonly unknown[]> {
-  const statements = [
+  await db.batch([
     holdIdentity(db, spare),
     db
       .prepare(SPARE_SQL.insertSpare)
@@ -99,9 +85,7 @@ export async function registerSpareWith(
     ...(record.kind === "created"
       ? [db.prepare(CREATOR_SQL.closeIntent).bind(record.opId)]
       : []),
-  ];
-  const results = await db.batch([...statements, ...alongside]);
-  return results.slice(statements.length);
+  ]);
 }
 
 // A spare's latest verification (creator-spares.ts decides what verifies one),

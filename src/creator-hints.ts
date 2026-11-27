@@ -29,8 +29,8 @@ function pacesNothing(at: PassClock): boolean {
 // cap since lowered, a clock that ran backward or a hand edit; trusting it
 // could hold the probes back for as long as it says, so it is dropped. So is
 // a wait set before `learnedAtMs`, when the newest candidate colo joined: the
-// round that set it did not know of that colo, as when a pass with every
-// class in observe mode, or an older build, added the colo and ended no wait.
+// round that set it did not know of that colo, as when an older build, which
+// keeps no waits, added the colo and ended none.
 // Under a cap that paces nothing every pass is a round.
 export function paceHint(
   wait: HintWait | undefined,

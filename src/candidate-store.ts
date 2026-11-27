@@ -43,32 +43,24 @@ export async function readCandidateColos(db: SqlDatabase): Promise<Colo[]> {
   });
 }
 
-// Adds a candidate colo while `holder` holds the pass lease, and, with
-// `endWaits`, in the same batch deletes every hint's wait: a colo nobody knew
-// Cloudflare places objects in says the hints have more to teach. A pass in
-// which no class acts adds without it, since observe mode writes none of the
-// pacing's state. Adding one already there changes nothing but the waits.
-// False when `holder` does not hold the lease, and nothing was written: like
-// every write of the pacing's state, it acts only for the pass that holds the
-// lease.
+// Adds a candidate colo while `holder` holds the pass lease, and in the same
+// batch deletes every hint's wait: a colo nobody knew Cloudflare places objects
+// in says the hints have more to teach. Adding one already there changes
+// nothing but the waits. False when `holder` does not hold the lease, and
+// nothing was written: like every write of the hints' waits, it acts only for
+// the pass that holds the lease.
 export async function addCandidateColo(
   db: SqlDatabase,
   colo: Colo,
   atMs: number,
   holder: string,
-  endWaits: boolean,
 ): Promise<boolean> {
   const results = await db.batch([
     db.prepare(CANDIDATE_SQL.addColo).bind(colo, atMs, holder),
-    ...(endWaits
-      ? [db.prepare(HINT_WAIT_SQL.deleteEveryWait).bind(holder)]
-      : []),
+    db.prepare(HINT_WAIT_SQL.deleteEveryWait).bind(holder),
     db.prepare(HINT_WAIT_SQL.holdsLease).bind(holder),
   ]);
-  return (
-    returnedRows(results[results.length - 1], "colo add's lease check").length >
-    0
-  );
+  return returnedRows(results[2], "colo add's lease check").length > 0;
 }
 
 // When the newest candidate colo joined, or null with none: a hint's wait set
