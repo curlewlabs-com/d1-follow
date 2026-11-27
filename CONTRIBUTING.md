@@ -34,17 +34,18 @@ changes"). Every dependency is pinned to an exact version.
 
 ## Stability before 1.0
 
-Before 1.0, a change may alter the package's interface: the names its entry
-points export, the entry points `package.json` declares, and the values it puts
-on the wire and in its logs, such as a mode's name. A release keeps nothing for
-an earlier 0.x release's callers, so a change need not either. A release that
-carries such a change is a minor, never a patch, so it needs the approval
-[Releases](#releases) describes, and its notes say what changed.
+Before 1.0, a change may alter the package's interface: what its entry points
+export, by name, signature or type; the entry points `package.json` declares;
+and the values it puts on the wire and in its logs, such as a mode's name. A
+release keeps nothing for an earlier 0.x release's callers, so a change need not
+either. A release that carries such a change is a minor, never a patch, so it
+needs the approval [Releases](#releases) describes, and its notes say what
+changed.
 
 The schemas are narrower, because a database outlives the release that built it:
-a table a published release created changes only additively, and a table no
-release has shipped may change in any way until one does (README sec."Schema
-changes").
+a table a published release created changes only additively and keeps the
+meaning of the values it stores, while a table no release has shipped may change
+in any way until one does (README sec."Schema changes").
 
 ## Before a large change
 
@@ -66,9 +67,9 @@ needs the maintainer's explicit approval before its tag is pushed.
 2. Push the tag `vX.Y.Z` at that commit. The Release workflow runs CI, packs the
    tarball and opens a draft release with it attached.
 3. Check the draft, add to its notes what changed since the last release - each
-   exported name, entry point, wire or log value, and table that changed - then
-   publish it. Releases are immutable: a published release's tag and assets
-   cannot be changed, so a fix is a new version.
+   export, entry point, wire or log value, and table that changed - then publish
+   it. Releases are immutable: a published release's tag and assets cannot be
+   changed, so a fix is a new version.
 
 ## License
 
