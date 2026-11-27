@@ -23,7 +23,6 @@ import {
   scriptedClass,
 } from "./creator-test-harness";
 import { readGaps } from "./gap-store";
-import { addCandidateColo } from "./candidate-store";
 import { claimPass } from "./pass-lease";
 
 let world: CreatorWorld;
@@ -207,7 +206,7 @@ describe("the pass lease", () => {
       .run("scheduler-gone", SCHEDULER, "id-gone", T0_MS - 2 * HOUR_MS);
     await world.seed("scheduler-moved", MIA, T0_MS - HOUR_MS);
     await world.seed("scheduler-old", DEN, T0_MS - 2 * HOUR_MS);
-    await addCandidateColo(world.handle(), IAD, T0_MS - HOUR_MS);
+    world.candidate(IAD, T0_MS - HOUR_MS);
     const cls = scriptedClass([ORD]);
     cls.where.set("scheduler-moved", IAD);
     cls.marked.set("scheduler-moved", MIA);

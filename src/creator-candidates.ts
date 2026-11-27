@@ -11,13 +11,20 @@ import {
 } from "./candidate-store";
 import type { Colo } from "./colo";
 import type { SqlDatabase } from "./creator-store";
+import { LeaseLost } from "./pass-lease";
 import type { PrimaryPlacement } from "./primary-colo";
 
 // The candidate colos as the pass knows them: read once, and added to as the
-// pass learns, so a colo learned in one pass is the next pass's to read.
+// pass learns, so a colo learned in one pass is the next pass's to read. Each
+// add is written for `holder`, the pass lease's holder, and deletes every
+// hint's wait (candidate-store.ts).
 export class PassCandidates {
+  // Whether this pass added a colo, after which it writes no hint's wait.
+  private added = false;
+
   private constructor(
     private readonly db: SqlDatabase,
+    private readonly holder: string,
     private readonly colos: Colo[],
   ) {}
 
@@ -26,11 +33,16 @@ export class PassCandidates {
   // it, and stays a candidate after the slot leaves, its gap reported.
   static async load(
     db: SqlDatabase,
+    holder: string,
     registered: Iterable<Colo>,
     atMs: number,
     log: (line: string) => void,
   ): Promise<PassCandidates> {
-    const candidates = new PassCandidates(db, await readCandidateColos(db));
+    const candidates = new PassCandidates(
+      db,
+      holder,
+      await readCandidateColos(db),
+    );
     for (const colo of new Set(registered)) {
       if (await candidates.add(colo, atMs)) {
         log(
@@ -46,14 +58,23 @@ export class PassCandidates {
   }
 
   // A creation that lands where no creation or slot has been is how the
-  // creator learns Cloudflare places objects there. True when `colo` joined.
+  // creator learns Cloudflare places objects there. True when `colo` joined;
+  // throws LeaseLost, having written nothing, when the pass lost its lease.
   async add(colo: Colo | null, atMs: number): Promise<boolean> {
     if (colo === null || this.colos.includes(colo)) {
       return false;
     }
-    await addCandidateColo(this.db, colo, atMs);
+    if (!(await addCandidateColo(this.db, colo, atMs, this.holder))) {
+      throw new LeaseLost();
+    }
     this.colos.push(colo);
+    this.added = true;
     return true;
+  }
+
+  // True once this pass has added a colo, and so deleted every hint's wait.
+  get addedAny(): boolean {
+    return this.added;
   }
 
   // The colos the pass judges its gaps over: every candidate, and the
