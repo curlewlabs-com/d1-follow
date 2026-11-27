@@ -40,8 +40,10 @@ test("a gap's record reads back, and a later write replaces it", async () => {
     { ...first, colo: ORD, attemptedAtMs: T0_MS },
   ]);
 
-  await deleteGap(db, later, HOLDER);
+  expect(await deleteGap(db, later, HOLDER)).toBe(true);
   expect((await readGaps(db)).map((g) => g.colo)).toEqual([ORD]);
+  // Already gone is deleted, not a lost lease.
+  expect(await deleteGap(db, later, HOLDER)).toBe(true);
 });
 
 // The risk this guards: a pass that stalled past its lease writes after the
@@ -62,7 +64,7 @@ test("writes and deletes nothing for a pass that lost its lease", async () => {
     leaseMs: 1_800_000,
   });
 
-  await deleteGap(db, record, HOLDER);
+  expect(await deleteGap(db, record, HOLDER)).toBe(false);
   expect(await readGaps(db)).toEqual([record]);
   expect(await writeGap(db, { ...record, begunAtMs: T0_MS - 1 }, HOLDER)).toBe(
     false,

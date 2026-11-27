@@ -7,6 +7,7 @@ import {
   CreatorStoreError,
   field,
   integerField,
+  returnedRows,
   type SqlDatabase,
 } from "./creator-store";
 import { HOLDS_PASS_LEASE } from "./pass-lease";
@@ -20,6 +21,8 @@ export const GAP_SQL = {
     "SELECT class_code, colo, begun_at_ms, attempted_at_ms FROM follow_gap ORDER BY class_code, colo",
   writeGap: `INSERT INTO follow_gap (class_code, colo, begun_at_ms, attempted_at_ms) SELECT ?, ?, ?, ? WHERE ${HOLDS_PASS_LEASE} ON CONFLICT (class_code, colo) DO UPDATE SET begun_at_ms = excluded.begun_at_ms, attempted_at_ms = excluded.attempted_at_ms RETURNING class_code`,
   deleteGap: `DELETE FROM follow_gap WHERE class_code = ? AND colo = ? AND ${HOLDS_PASS_LEASE}`,
+  // Read in the delete's own batch, so it answers for the same moment.
+  holdsLease: `SELECT 1 AS held WHERE ${HOLDS_PASS_LEASE}`,
 } as const;
 
 export interface GapRecord {
@@ -71,16 +74,17 @@ export async function writeGap(
   return results.length > 0;
 }
 
-// Deletes a gap's record while `holder` holds the pass lease. A pass that has
-// lost the lease leaves the record to the pass that holds it, and learns of
-// the loss when it next renews.
+// Deletes a gap's record while `holder` holds the pass lease; false when it
+// does not, and the record is left to the pass that holds it. A record already
+// gone reads as deleted.
 export async function deleteGap(
   db: SqlDatabase,
   gap: { readonly classCode: number; readonly colo: Colo },
   holder: string,
-): Promise<void> {
-  await db
-    .prepare(GAP_SQL.deleteGap)
-    .bind(gap.classCode, gap.colo, holder)
-    .run();
+): Promise<boolean> {
+  const results = await db.batch([
+    db.prepare(GAP_SQL.deleteGap).bind(gap.classCode, gap.colo, holder),
+    db.prepare(GAP_SQL.holdsLease).bind(holder),
+  ]);
+  return returnedRows(results[1], "gap delete's lease check").length > 0;
 }

@@ -729,8 +729,11 @@ async function runLeasedPass(
     // could reach it. Null when no attempt is due.
     const primaryHint = primary?.regionHint ?? null;
     const attemptHint = pacing?.due === true ? primaryHint : null;
-    const waitNote =
+    // When a waiting gap is next attempted, read as it stands when logged, so
+    // a gap a probe has just filled, or one no hint can reach, names no time.
+    const waitNote = (): string | null =>
       primary !== null &&
+      primaryHint !== null &&
       pacing !== null &&
       pacing.dueAtMs !== null &&
       primaryGap()
@@ -738,37 +741,42 @@ async function runLeasedPass(
         : null;
     if (modes.modeOf("class", cls.code) !== "act") {
       report.wouldCreate.push(cls.code);
+      const note = waitNote();
       log(
-        `[follow] ${cls.label} dry-run - would probe through ${regionHints.join(",")}${primaryGap() && attemptHint !== null && primary !== null ? ` and attempt the gap in ${primary.colo}` : ""}${waitNote === null ? "" : `; ${waitNote}`}`,
+        `[follow] ${cls.label} dry-run - would probe through ${regionHints.join(",")}${primaryGap() && attemptHint !== null && primary !== null ? ` and attempt the gap in ${primary.colo}` : ""}${note === null ? "" : `; ${note}`}`,
       );
       continue;
-    }
-    if (primary !== null && pacing?.reason === "untrusted") {
-      log(
-        `[follow] ${cls.label} gap record in ${primary.colo} cannot be trusted - dropped`,
-      );
     }
     // A gap's record goes once a pass sees the gap filled, or sees the class
     // no longer has it: a colo that is no candidate and no longer the
     // primary's, or a shortfall of spares in a colo the primary has left. A
     // gap that returns is then a new one. After attempting, the gap still
-    // open beside the primary records the attempt. Each write is guarded on
-    // the lease, so a pass that lost it cannot put back what the next one
-    // deleted.
+    // open beside the primary records the attempt, and a record the pass
+    // could not trust goes even when no attempt replaced it. Each write is
+    // guarded on the lease, so a pass that lost it cannot put back what the
+    // next one deleted, and stops on finding it lost.
     const settleGaps = async (attempted: boolean): Promise<void> => {
       if (primary === null || pacing === null) return;
       const open = (colo: Colo): boolean =>
         colo === primary.colo
           ? primaryGap()
           : candidates.has(colo) && !holds(cls.code, colo);
+      const untrusted = pacing.reason === "untrusted";
+      const recording = attempted && primaryGap();
       for (const record of gapRecords.values()) {
-        if (record.classCode !== cls.code || open(record.colo)) continue;
-        await deleteGap(db, record, fence.holder);
+        if (record.classCode !== cls.code) continue;
+        const dropped = untrusted && record.colo === primary.colo && !recording;
+        if (open(record.colo) && !dropped) continue;
+        if (!(await deleteGap(db, record, fence.holder))) {
+          throw new LeaseLost();
+        }
         log(
-          `[follow] ${cls.label} gap in ${record.colo} closed - its record is deleted`,
+          dropped
+            ? `[follow] ${cls.label} gap record in ${record.colo} cannot be trusted - deleted`
+            : `[follow] ${cls.label} gap in ${record.colo} closed - its record is deleted`,
         );
       }
-      if (!attempted || !primaryGap()) return;
+      if (!recording) return;
       const written = await writeGap(
         db,
         {
@@ -780,6 +788,11 @@ async function runLeasedPass(
         fence.holder,
       );
       if (!written) throw new LeaseLost();
+      if (untrusted) {
+        log(
+          `[follow] ${cls.label} gap record in ${primary.colo} cannot be trusted - replaced`,
+        );
+      }
     };
     if (unresolved.has(cls.code)) {
       log(
@@ -822,8 +835,9 @@ async function runLeasedPass(
         attempted = true;
         await attempt(attemptHint);
       }
-    } else if (primaryHint !== null && waitNote !== null) {
-      log(`[follow] ${cls.label} ${waitNote}`);
+    } else {
+      const note = waitNote();
+      if (note !== null) log(`[follow] ${cls.label} ${note}`);
     }
     await settleGaps(attempted);
   }

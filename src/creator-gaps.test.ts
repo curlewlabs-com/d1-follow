@@ -121,7 +121,26 @@ describe("pacing", () => {
     expect(creations(await at(0))).toBe(ATTEMPTING);
     expect(await gaps()).toEqual([gap(MIA, 0, 0)]);
     expect(world.lines).toContain(
-      "[follow] scheduler gap record in MIA cannot be trusted - dropped",
+      "[follow] scheduler gap record in MIA cannot be trusted - replaced",
+    );
+  });
+
+  // A record the pass cannot trust is dropped even when no attempt can
+  // replace it, so it is not read again as the gap's history once the class
+  // can attempt.
+  test("deletes a record it cannot trust when no attempt replaces it", async () => {
+    const lost: ScriptedClass = {
+      ...cls,
+      observe: () => Promise.reject(new Error("answer lost")),
+    };
+    await at(0, lost);
+    world.creator
+      .query("UPDATE follow_gap SET begun_at_ms = ?, attempted_at_ms = ?")
+      .run(T0_MS + 5 * HOUR_MS, T0_MS + 5 * HOUR_MS);
+    expect(creations(await at(1, lost))).toBe(0);
+    expect(await gaps()).toEqual([]);
+    expect(world.lines).toContain(
+      "[follow] scheduler gap record in MIA cannot be trusted - deleted",
     );
   });
 
@@ -158,6 +177,36 @@ describe("pacing", () => {
       `[follow] scheduler dry-run - would probe through enam; the gap in MIA is next attempted by a pass from ${new Date(T0_MS + 48.5 * HOUR_MS).toISOString()}`,
     );
     expect(await gaps()).toEqual([gap(MIA, 0, 25)]);
+  });
+
+  // The wait's time is for an operator deciding whether to wait or launch by
+  // hand, so it names none for a gap a probe has just filled, or for one no
+  // hint can reach.
+  test("names no wait for a gap a probe filled or no hint reaches", async () => {
+    await at(0);
+    const waits = (): string[] =>
+      world.lines.filter((l) => l.includes("is next attempted"));
+    await at(24);
+    await at(25);
+    expect(waits()).toHaveLength(1);
+
+    world.primary = { colo: MIA, region: "MARS" };
+    await setMode(world.handle(), {
+      kind: "class",
+      code: SCHEDULER,
+      mode: "dry_run",
+      opId: "dry",
+      atMs: T0_MS + 26 * HOUR_MS,
+    });
+    await at(26);
+    expect(waits()).toHaveLength(1);
+
+    await world.act();
+    world.primary = { colo: MIA, region: "ENAM" };
+    landings.unshift(MIA);
+    const filled = await at(27);
+    expect(filled.created.map((o) => o.colo)).toEqual([MIA]);
+    expect(waits()).toHaveLength(1);
   });
 
   test("keeps a class with an attempt left open from attempting or writing its record", async () => {
@@ -306,5 +355,30 @@ describe("the gap's record", () => {
     expect(creations(report)).toBe(ATTEMPTING);
     expect(report.leaseLost).toBe(true);
     expect(await gaps()).toEqual([]);
+  });
+
+  // As above for a pass whose only write of a record is a delete: with no
+  // lane to copy and nothing to release, no later renewal would notice the
+  // lease went, so the delete itself reports it and the pass says it stopped.
+  test("is not deleted by a pass that lost its lease after its gap filled", async () => {
+    await at(0);
+    landings.unshift(MIA);
+    world.afterBatch = () => {
+      if (cls.placed.length === 1) {
+        world.afterBatch = undefined;
+        world.creator
+          .query("UPDATE follow_pass SET holder = 'next-pass'")
+          .run();
+      }
+    };
+    world.clock = T0_MS + HOUR_MS;
+    const report = await world.pass(cls, {
+      attemptsPerClassPerPass: ATTEMPTS,
+      laneCodes: [],
+    });
+    expect(report.created.map((o) => o.colo)).toEqual([MIA]);
+    expect(report.leaseLost).toBe(true);
+    expect(await gaps()).toEqual([gap(MIA, 0, 0)]);
+    expect(world.lines.filter((l) => l.includes("closed"))).toEqual([]);
   });
 });
