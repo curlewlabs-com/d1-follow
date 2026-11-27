@@ -379,11 +379,12 @@ describe("the gap's record", () => {
     expect(await gaps()).toEqual([gap(MIA, 30, 30)]);
   });
 
-  // The risk this guards: a pass that lost its lease after its last attempt
-  // writes the record anyway, over one the pass now holding the lease wrote
-  // or deleted. The write names the lease, so it is refused, and the pass
-  // reports the lease lost.
-  test("is not written by a pass that lost its lease after attempting", async () => {
+  // The risk this guards: a pass that lost its lease writes the record
+  // anyway, over one the pass now holding the lease wrote or deleted. The
+  // record is written before the attempt it records, naming the lease, so
+  // the write is refused, the pass makes no attempt, and it reports the lease
+  // lost.
+  test("is not written by a pass that lost its lease before attempting", async () => {
     let stolen = false;
     world.afterBatch = () => {
       const { n } = world.creator
@@ -391,7 +392,7 @@ describe("the gap's record", () => {
           `SELECT count(*) AS n FROM follow_ledger WHERE kind = ${LEDGER_KIND.name_spent}`,
         )
         .get() as { n: number };
-      if (!stolen && n === ATTEMPTING) {
+      if (!stolen && n === PROBE_ONLY) {
         stolen = true;
         world.creator
           .query("UPDATE follow_pass SET holder = 'next-pass'")
@@ -400,9 +401,42 @@ describe("the gap's record", () => {
     };
     const report = await at(0);
     expect(stolen).toBe(true);
-    expect(creations(report)).toBe(ATTEMPTING);
+    expect(creations(report)).toBe(PROBE_ONLY);
     expect(report.leaseLost).toBe(true);
     expect(await gaps()).toEqual([]);
+  });
+
+  // An attempt is recorded before it is made, so a pass that stops after
+  // attempting has already recorded it, and the next pass reads the gap's
+  // pacing from it rather than from an older attempt.
+  test("records an attempt before it is made", async () => {
+    await at(0);
+    await at(24);
+    let seen: GapRecord[] = [];
+    const watching: ScriptedClass = {
+      ...cls,
+      observe: async (name, hint) => {
+        seen = await readGaps(world.handle());
+        return await cls.observe(name, hint);
+      },
+    };
+    await at(48, watching);
+    expect(seen).toEqual([gap(MIA, 0, 48)]);
+  });
+
+  // The last attempt of a pass restores the slot while spares are still
+  // short. No attempt targeted the shortfall, so it has no record yet; the
+  // next pass's attempt at it begins one, young.
+  test("begins no record for a kind of gap no attempt targeted", async () => {
+    const withSpare: ScriptedClass = { ...cls, spares: 1 };
+    landings.splice(ATTEMPTS, 0, MIA);
+    const restored = await at(0, withSpare);
+    expect(restored.created.map((o) => o.colo)).toEqual([MIA]);
+    expect(creations(restored)).toBe(ATTEMPTING);
+    expect(await gaps()).toEqual([]);
+
+    expect(creations(await at(1, withSpare))).toBe(ATTEMPTING);
+    expect(await gaps()).toEqual([gap(MIA, 1, 1, "spares")]);
   });
 
   // As above for a pass whose only write of a record is a delete: with no

@@ -204,11 +204,15 @@ CREATE TABLE IF NOT EXISTS follow_gap (
   -- 1 the class has no slot in the colo, 2 it has its slot there and fewer
   -- spares than it keeps, which is a gap only in the primary's colo.
   kind INTEGER NOT NULL CHECK (kind IN (1, 2)),
-  -- When the pass that made the gap's first creation began.
-  begun_at_ms INTEGER NOT NULL,
+  -- When the pass that made the gap's first creation began. Each time is held
+  -- to the integers a pass reads exactly, so no row can stop the pass that
+  -- reads it (src/creator-gaps.ts drops a record it cannot trust).
+  begun_at_ms INTEGER NOT NULL CHECK (begun_at_ms BETWEEN 0 AND 9007199254740991),
   -- When the pass that last attempted the gap through the hint for the
   -- primary's region began; null while none has since the row began.
-  attempted_at_ms INTEGER,
+  attempted_at_ms INTEGER CHECK (
+    attempted_at_ms IS NULL OR attempted_at_ms BETWEEN 0 AND 9007199254740991
+  ),
   PRIMARY KEY (class_code, colo)
 ) STRICT;
 

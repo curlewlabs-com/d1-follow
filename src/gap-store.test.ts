@@ -51,6 +51,23 @@ test("a gap's record reads back, and a later write replaces it", async () => {
   expect(await deleteGap(db, later, HOLDER)).toBe(true);
 });
 
+// The risk this guards: a time no pass can read exactly, epoch nanoseconds
+// say, would make every pass fail on reading the table. The schema refuses it,
+// so the records a pass reads are ones it can judge.
+test("refuses a time a pass cannot read exactly", async () => {
+  const world = await CreatorWorld.open();
+  const insert = (begunAtMs: bigint, attemptedAtMs: bigint | null) =>
+    world.creator
+      .query(
+        "INSERT INTO follow_gap (class_code, colo, kind, begun_at_ms, attempted_at_ms) VALUES (?, ?, 1, ?, ?)",
+      )
+      .run(SCHEDULER, MIA, begunAtMs, attemptedAtMs);
+  const nanos = BigInt(T0_MS) * 1_000_000n;
+  expect(() => insert(nanos, null)).toThrow(/CHECK/);
+  expect(() => insert(BigInt(T0_MS), nanos)).toThrow(/CHECK/);
+  expect(() => insert(-1n, null)).toThrow(/CHECK/);
+});
+
 // The risk this guards: a pass that stalled past its lease writes after the
 // pass now holding it has deleted the record, and a gap the new pass saw
 // filled comes back, or one it started over keeps an old age. Each write

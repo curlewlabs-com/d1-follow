@@ -440,10 +440,12 @@ once its first cap has passed. At an hourly pass and a one-day cap, a gap no
 attempt fills gets about 24 rounds in its first day and one a day after.
 
 - **The record.** The pass that makes a gap's first attempt records when it
-  began, and each pass that attempts it records that attempt. A gap's age is
-  wall time from its first attempt, whether or not later passes can create: a
-  class in dry-run, or one with an attempt left open, makes no attempt, and its
-  gap ages all the same.
+  began, and each pass that attempts it records that attempt, before making it,
+  as a creation's intent comes before the creation: a pass that stops partway
+  has recorded what it attempted, and fails toward fewer attempts, never more. A
+  gap's age is wall time from its first attempt, whether or not later passes can
+  create: a class in dry-run, or one with an attempt left open, makes no
+  attempt, and its gap ages all the same.
 - **Its end.** A pass deletes a gap's record when it sees the gap filled, or
   sees that the class no longer has it: a colo that is neither a candidate nor
   the primary's, or a shortfall of spares in a colo the primary has left. A gap

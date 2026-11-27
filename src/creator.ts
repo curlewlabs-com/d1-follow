@@ -780,30 +780,48 @@ async function runLeasedPass(
       );
       continue;
     }
+    // Each attempt at the gap in the primary's colo is recorded before it is
+    // made, under the lease, as a creation's intent comes before it: the
+    // pass's first attempt at each kind of gap writes the record, so a pass
+    // that stops partway has recorded what it attempted, and a kind no
+    // attempt targeted gets no record. A gap whose kind changed under this
+    // pass's attempts began with them. A refused write means the lease is
+    // gone, and the pass stops before the attempt.
+    const recorded = new Set<GapKind>();
+    const recordAttempt = async (paced: Paced): Promise<void> => {
+      const kind = gapIn(paced.colo);
+      if (kind === null || recorded.has(kind)) return;
+      recorded.add(kind);
+      const record: GapRecord = {
+        classCode: cls.code,
+        colo: paced.colo,
+        kind,
+        begunAtMs: paced.kind === kind ? paced.pacing.begunAtMs : passStartMs,
+        attemptedAtMs: passStartMs,
+      };
+      if (!(await writeGap(db, record, fence.holder))) throw new LeaseLost();
+      if (paced.kind === kind && paced.pacing.reason === "untrusted") {
+        log(
+          `[follow] ${cls.label} gap record in ${paced.colo} cannot be trusted - replaced`,
+        );
+      }
+      gapRecords.set(gapKey(cls.code, paced.colo), record);
+    };
     // A gap's record goes once a pass sees the gap filled, of another kind,
     // or gone from the class: a colo that is no candidate and no longer the
     // primary's, or a shortfall of spares in a colo the primary has left. A
-    // gap that returns or changes kind is then a new one. After attempting,
-    // the gap still open beside the primary records the attempt, under the
-    // kind it has then, and a record the pass could not trust goes even when
-    // no attempt replaced it. Each write is guarded on the lease, so a pass
-    // that lost it cannot put back what the next one deleted, and stops on
-    // finding it lost. `paced` is the pacing the attempts ran under.
-    const settleGaps = async (
-      paced: Paced | null,
-      attempted: boolean,
-    ): Promise<void> => {
+    // gap that returns or changes kind is then a new one. A record the pass
+    // could not trust goes too when no attempt replaced it. Each delete is
+    // guarded on the lease, so a pass that lost it cannot remove what the
+    // next one wrote, and stops on finding it lost.
+    const settleGaps = async (): Promise<void> => {
       if (primary === null) return;
-      const recording = attempted ? gapIn(primary.colo) : null;
       const untrusted = paceNow()?.pacing.reason === "untrusted";
       for (const record of gapRecords.values()) {
         if (record.classCode !== cls.code) continue;
         const kind = gapIn(record.colo);
         const dropped =
-          untrusted &&
-          record.colo === primary.colo &&
-          kind === record.kind &&
-          recording === null;
+          untrusted && record.colo === primary.colo && kind === record.kind;
         if (kind === record.kind && !dropped) continue;
         if (!(await deleteGap(db, record, fence.holder))) {
           throw new LeaseLost();
@@ -816,33 +834,12 @@ async function runLeasedPass(
               : `[follow] ${cls.label} gap in ${record.colo} is now ${kind === "slot" ? "a missing slot" : "a shortfall of spares"} - its record is deleted`,
         );
       }
-      if (recording === null) return;
-      const written = await writeGap(
-        db,
-        {
-          classCode: cls.code,
-          colo: primary.colo,
-          kind: recording,
-          // A gap whose kind changed under this pass's attempts began with
-          // them.
-          begunAtMs:
-            paced?.kind === recording ? paced.pacing.begunAtMs : passStartMs,
-          attemptedAtMs: passStartMs,
-        },
-        fence.holder,
-      );
-      if (!written) throw new LeaseLost();
-      if (paced?.pacing.reason === "untrusted") {
-        log(
-          `[follow] ${cls.label} gap record in ${primary.colo} cannot be trusted - replaced`,
-        );
-      }
     };
     if (unresolved.has(cls.code)) {
       log(
         `[follow] ${cls.label} has attempts still open - no new attempts this pass`,
       );
-      await settleGaps(null, false);
+      await settleGaps();
       continue;
     }
     const attempt = async (regionHint: string): Promise<void> => {
@@ -873,18 +870,17 @@ async function runLeasedPass(
       await attempt(regionHint);
     }
     const paced = paceNow();
-    let attempted = false;
     if (paced !== null && paced.pacing.due && primaryHint !== null) {
       const attempts = budget.get(cls.code) ?? 0;
       for (let i = 0; i < attempts && primaryGap(); i++) {
-        attempted = true;
+        await recordAttempt(paced);
         await attempt(primaryHint);
       }
     } else {
       const note = waitNote();
       if (note !== null) log(`[follow] ${cls.label} ${note}`);
     }
-    await settleGaps(paced, attempted);
+    await settleGaps();
   }
 
   // Release what has been out of the registry long enough and holds no lane.
