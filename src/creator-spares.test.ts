@@ -213,6 +213,39 @@ describe("keeping spares beside the primary", () => {
     expect(keeping.marked.get(kept?.name ?? "")).toBe(ORD);
   });
 
+  // The failures this guards: a spare whose registration committed and lost
+  // its reply was emptied, so a registered spare held no marker, and was not
+  // counted, so the next attempt this pass registered a spare past the count.
+  test("keeps and counts a spare whose registration lost its reply", async () => {
+    const losing = { ...scriptedClass([ORD, ORD, ORD]), spares: 1 };
+    losing.where.set("scheduler-base", ORD);
+    let loseReply = false;
+    world.afterBatch = () => {
+      if (!loseReply) return;
+      loseReply = false;
+      throw new Error("reply lost");
+    };
+    const placing = {
+      ...losing,
+      place: async (name: string, colo: Colo, deadlineMs: number) => {
+        await losing.place(name, colo, deadlineMs);
+        loseReply = true;
+      },
+    };
+    const report = await world.pass(placing);
+    expect(report.sparesCreated).toEqual([]);
+    expect(report.failures).toHaveLength(1);
+    expect(losing.releasedNames).toEqual([]);
+    const [kept, ...beyond] = await readSpares(world.handle());
+    expect(beyond).toEqual([]);
+    expect(losing.marked.get(kept?.name ?? "")).toBe(ORD);
+
+    world.clock += HOUR_MS;
+    const next = await world.pass(losing);
+    expect(next.sparesVerified).toContain(kept?.name ?? "");
+    expect(await readSpares(world.handle())).toHaveLength(1);
+  });
+
   // Once the class holds its spares there, a creation landing beside them is
   // spent as before, and the primary's colo asks for no more attempts.
   test("spends a landing once the class holds its spares", async () => {
