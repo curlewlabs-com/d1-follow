@@ -1,10 +1,10 @@
 // How the pass paces its attempts at the gap in the primary's colo by the
 // gap's record: on every pass while the gap is young, then once a cap, and the
-// record's life from the first attempt to the pass that sees the gap closed,
+// record's life from the first creation to the pass that sees the gap closed,
 // in the world creator-test-harness.ts sets up. The cap is the harness's
-// maxBackoffMs, a day, and passes are hourly.
+// maxBackoffMs, a day, and passes are hourly. The probes' own pacing is
+// creator-hints.test.ts's.
 import { beforeEach, describe, expect, test } from "bun:test";
-import { addCandidateColo } from "./candidate-store";
 import type { Colo } from "./colo";
 import type { CreatorPassReport } from "./creator";
 import { LEDGER_KIND, setMode } from "./creator-store";
@@ -22,10 +22,6 @@ import {
 import { readGaps, type GapKind, type GapRecord } from "./gap-store";
 
 const ATTEMPTS = 2;
-// What a pass creates: its probe through the one hint, and the attempts when
-// they are due, each spent beside the class's slot in ORD.
-const PROBE_ONLY = 1;
-const ATTEMPTING = 1 + ATTEMPTS;
 
 let world: CreatorWorld;
 let landings: Colo[];
@@ -43,6 +39,11 @@ beforeEach(async () => {
 
 const creations = (report: CreatorPassReport): number =>
   report.spent.length + report.created.length + report.sparesCreated.length;
+// The attempts a pass made: its creations less one probe through each hint
+// it probed through. Every creation here answers, so none drops out of the
+// count.
+const attempted = (report: CreatorPassReport): number =>
+  creations(report) - report.regionHintsProbed.length;
 
 // A pass `hours` after T0.
 async function at(
@@ -94,11 +95,11 @@ describe("pacing", () => {
   test("attempts on every pass while the gap is young, then once a cap", async () => {
     const counts: number[] = [];
     for (let hour = 0; hour <= 48; hour++) {
-      counts.push(creations(await at(hour)));
+      counts.push(attempted(await at(hour)));
     }
-    expect(counts.slice(0, 24)).toEqual(Array(24).fill(ATTEMPTING));
-    expect(counts.slice(24, 47)).toEqual(Array(23).fill(PROBE_ONLY));
-    expect(counts.slice(47)).toEqual([ATTEMPTING, PROBE_ONLY]);
+    expect(counts.slice(0, 24)).toEqual(Array(24).fill(ATTEMPTS));
+    expect(counts.slice(24, 47)).toEqual(Array(23).fill(0));
+    expect(counts.slice(47)).toEqual([ATTEMPTS, 0]);
     expect(await gaps()).toEqual([gap(MIA, 0, 47)]);
     expect(world.lines).toContain(
       `[follow] scheduler the gap in MIA is next attempted by a pass from ${new Date(T0_MS + 46.5 * HOUR_MS).toISOString()}`,
@@ -109,10 +110,10 @@ describe("pacing", () => {
   // young both attempt, each within the attempts bound; once it is old the
   // second finds the first one's attempt and waits.
   test("two passes in an hour both attempt a young gap, and one an old", async () => {
-    expect(creations(await at(0))).toBe(ATTEMPTING);
-    expect(creations(await at(0.5))).toBe(ATTEMPTING);
-    expect(creations(await at(24))).toBe(ATTEMPTING);
-    expect(creations(await at(24.5))).toBe(PROBE_ONLY);
+    expect(attempted(await at(0))).toBe(ATTEMPTS);
+    expect(attempted(await at(0.5))).toBe(ATTEMPTS);
+    expect(attempted(await at(24))).toBe(ATTEMPTS);
+    expect(attempted(await at(24.5))).toBe(0);
     expect(await gaps()).toEqual([gap(MIA, 0, 24)]);
   });
 
@@ -126,7 +127,7 @@ describe("pacing", () => {
     ["was attempted before it began", gap(MIA, -1, -2)],
   ])("drops a record that %s, and attempts", async (_, record) => {
     seedGap(record);
-    expect(creations(await at(0))).toBe(ATTEMPTING);
+    expect(attempted(await at(0))).toBe(ATTEMPTS);
     expect(await gaps()).toEqual([gap(MIA, 0, 0)]);
     expect(world.lines).toContain(
       "[follow] scheduler gap record in MIA cannot be trusted - replaced",
@@ -145,7 +146,7 @@ describe("pacing", () => {
     world.creator
       .query("UPDATE follow_gap SET begun_at_ms = ?, attempted_at_ms = ?")
       .run(T0_MS + 5 * HOUR_MS, T0_MS + 5 * HOUR_MS);
-    expect(creations(await at(1, lost))).toBe(0);
+    expect(attempted(await at(1, lost))).toBe(0);
     expect(await gaps()).toEqual([]);
     expect(world.lines).toContain(
       "[follow] scheduler gap record in MIA cannot be trusted - deleted",
@@ -157,7 +158,7 @@ describe("pacing", () => {
   // back after the cap finds the gap old. Dry-run writes none of the records
   // and logs what is due.
   test("lets a gap age while its class can create nothing", async () => {
-    expect(creations(await at(0))).toBe(ATTEMPTING);
+    expect(attempted(await at(0))).toBe(ATTEMPTS);
     const dryRun = async (hours: number): Promise<CreatorPassReport> => {
       await setMode(world.handle(), {
         kind: "class",
@@ -176,8 +177,8 @@ describe("pacing", () => {
     expect(await gaps()).toEqual([gap(MIA, 0, 0)]);
 
     await world.act();
-    expect(creations(await at(25))).toBe(ATTEMPTING);
-    expect(creations(await at(26))).toBe(PROBE_ONLY);
+    expect(attempted(await at(25))).toBe(ATTEMPTS);
+    expect(attempted(await at(26))).toBe(0);
     expect(await gaps()).toEqual([gap(MIA, 0, 25)]);
 
     await dryRun(27);
@@ -218,7 +219,7 @@ describe("pacing", () => {
   });
 
   test("keeps a class with an attempt left open from attempting or writing its record", async () => {
-    expect(creations(await at(0))).toBe(ATTEMPTING);
+    expect(attempted(await at(0))).toBe(ATTEMPTS);
     const lost: ScriptedClass = {
       ...cls,
       observe: () => Promise.reject(new Error("answer lost")),
@@ -227,7 +228,7 @@ describe("pacing", () => {
     await at(1, lost);
     expect(await gaps()).toEqual([gap(MIA, 0, 1)]);
     const blocked = await at(2, lost);
-    expect(creations(blocked)).toBe(0);
+    expect(attempted(blocked)).toBe(0);
     expect(await gaps()).toEqual([gap(MIA, 0, 1)]);
   });
 });
@@ -235,20 +236,42 @@ describe("pacing", () => {
 describe("the gap's record", () => {
   // A pass that cannot read where the primary is cannot say which colo the
   // attempts are for, nor whether a shortfall of spares is still one. It makes
-  // no attempts and leaves the record as it is, even when its probe has filled
-  // the colo; the next pass that reads the primary judges it.
-  test("is left alone while the primary cannot be read", async () => {
-    expect(creations(await at(0))).toBe(ATTEMPTING);
+  // no attempts and leaves such a record as it is; the next pass that reads
+  // the primary judges it.
+  test("leaves a shortfall of spares alone while the primary cannot be read", async () => {
+    await world.seed("scheduler-iad", IAD, T0_MS);
+    cls.where.set("scheduler-iad", IAD);
+    landings.splice(0, landings.length, ...Array(400).fill(IAD));
+    const withSpare: ScriptedClass = { ...cls, spares: 1 };
+    world.primary = { colo: ORD, region: "ENAM" };
+    expect(attempted(await at(0, withSpare))).toBe(ATTEMPTS);
+    expect(await gaps()).toEqual([gap(ORD, 0, 0, "spares")]);
+
+    world.primary = "fails";
+    expect(attempted(await at(1, withSpare))).toBe(0);
+    expect(await gaps()).toEqual([gap(ORD, 0, 0, "spares")]);
+  });
+
+  // The risk this guards: a missing slot filled while the primary cannot be
+  // read, and lost again before it can, would leave the record of the first
+  // gap standing, so the second would start old and its class would not
+  // probe on every pass. A missing slot the class now holds is closed, or a
+  // shortfall of spares, whatever the primary is, so the pass judges it.
+  test("closes a missing slot it sees filled while the primary cannot be read", async () => {
+    expect(attempted(await at(0))).toBe(ATTEMPTS);
     world.primary = "fails";
     landings.unshift(MIA);
     const unread = await at(1);
-    expect(creations(unread)).toBe(PROBE_ONLY);
+    expect(attempted(unread)).toBe(0);
     expect(unread.created.map((o) => o.colo)).toEqual([MIA]);
-    expect(await gaps()).toEqual([gap(MIA, 0, 0)]);
-
-    world.primary = { colo: MIA, region: "ENAM" };
-    expect(creations(await at(2))).toBe(PROBE_ONLY);
     expect(await gaps()).toEqual([]);
+
+    const name = unread.created[0]?.name ?? "";
+    cls.where.set(name, IAD);
+    const reopened = await at(30);
+    expect(reopened.unregistered.map((o) => o.name)).toEqual([name]);
+    expect(reopened.regionHintsProbed).toEqual(["enam"]);
+    expect(await gaps()).toEqual([gap(MIA, 30, null)]);
   });
 
   // A record outliving its gap would make the next gap there start old. So
@@ -265,9 +288,9 @@ describe("the gap's record", () => {
     cls.where.set(name, IAD);
     const reopened = await at(31);
     expect(reopened.unregistered.map((o) => o.name)).toEqual([name]);
-    expect(creations(reopened)).toBe(ATTEMPTING);
+    expect(attempted(reopened)).toBe(ATTEMPTS);
     expect(await gaps()).toEqual([gap(MIA, 31, 31)]);
-    expect(creations(await at(32))).toBe(ATTEMPTING);
+    expect(attempted(await at(32))).toBe(ATTEMPTS);
   });
 
   // A shortfall of spares is a gap only while the primary is in its colo. The
@@ -282,7 +305,7 @@ describe("the gap's record", () => {
     const withSpare: ScriptedClass = { ...cls, spares: 1 };
     world.primary = { colo: ORD, region: "ENAM" };
 
-    expect(creations(await at(0, withSpare))).toBe(ATTEMPTING);
+    expect(attempted(await at(0, withSpare))).toBe(ATTEMPTS);
     expect(await gaps()).toEqual([gap(ORD, 0, 0, "spares")]);
 
     world.primary = { colo: MIA, region: "ENAM" };
@@ -290,7 +313,7 @@ describe("the gap's record", () => {
     expect(await gaps()).toEqual([gap(MIA, 1, 1, "spares")]);
 
     world.primary = { colo: ORD, region: "ENAM" };
-    expect(creations(await at(30, withSpare))).toBe(ATTEMPTING);
+    expect(attempted(await at(30, withSpare))).toBe(ATTEMPTS);
     expect(await gaps()).toEqual([gap(ORD, 30, 30, "spares")]);
   });
 
@@ -305,16 +328,16 @@ describe("the gap's record", () => {
     const withSpare: ScriptedClass = { ...cls, spares: 1 };
     world.primary = { colo: ORD, region: "ENAM" };
     await at(0, withSpare);
-    expect(creations(await at(24, withSpare))).toBe(ATTEMPTING);
-    expect(creations(await at(25, withSpare))).toBe(PROBE_ONLY);
+    expect(attempted(await at(24, withSpare))).toBe(ATTEMPTS);
+    expect(attempted(await at(25, withSpare))).toBe(0);
     expect(await gaps()).toEqual([gap(ORD, 0, 24, "spares")]);
 
     cls.where.set("scheduler-ord", IAD);
     const lost = await at(26, withSpare);
     expect(lost.unregistered.map((o) => o.name)).toEqual(["scheduler-ord"]);
-    expect(creations(lost)).toBe(ATTEMPTING);
+    expect(attempted(lost)).toBe(ATTEMPTS);
     expect(await gaps()).toEqual([gap(ORD, 26, 26)]);
-    expect(creations(await at(27, withSpare))).toBe(ATTEMPTING);
+    expect(attempted(await at(27, withSpare))).toBe(ATTEMPTS);
   });
 
   // The reverse: a probe restores the slot while the class is still short of
@@ -323,31 +346,31 @@ describe("the gap's record", () => {
   test("starts over when a probe restores the slot and spares are still short", async () => {
     const withSpare: ScriptedClass = { ...cls, spares: 1 };
     await at(0, withSpare);
-    expect(creations(await at(24, withSpare))).toBe(ATTEMPTING);
-    expect(creations(await at(25, withSpare))).toBe(PROBE_ONLY);
+    expect(attempted(await at(24, withSpare))).toBe(ATTEMPTS);
+    expect(attempted(await at(25, withSpare))).toBe(0);
 
     landings.unshift(MIA);
     const restored = await at(26, withSpare);
     expect(restored.created.map((o) => o.colo)).toEqual([MIA]);
     expect(restored.spent).toHaveLength(ATTEMPTS);
     expect(await gaps()).toEqual([gap(MIA, 26, 26, "spares")]);
-    expect(creations(await at(27, withSpare))).toBe(ATTEMPTING);
+    expect(attempted(await at(27, withSpare))).toBe(ATTEMPTS);
   });
 
   // A base slot's gap stays a gap while the primary is elsewhere, so its
   // record stays and keeps its age. A record that has been attempted is not
   // young again when the primary returns: the gap had its first day.
   test("keeps an old gap old when the primary moves back into it", async () => {
-    await addCandidateColo(world.handle(), MIA, T0_MS);
-    expect(creations(await at(0))).toBe(ATTEMPTING);
+    world.candidate(MIA, T0_MS);
+    expect(attempted(await at(0))).toBe(ATTEMPTS);
 
     world.primary = { colo: ORD, region: "ENAM" };
-    expect(creations(await at(1))).toBe(PROBE_ONLY);
+    expect(attempted(await at(1))).toBe(0);
     expect(await gaps()).toEqual([gap(MIA, 0, 0)]);
 
     world.primary = { colo: MIA, region: "ENAM" };
-    expect(creations(await at(30))).toBe(ATTEMPTING);
-    expect(creations(await at(31))).toBe(PROBE_ONLY);
+    expect(attempted(await at(30))).toBe(ATTEMPTS);
+    expect(attempted(await at(31))).toBe(0);
     expect(await gaps()).toEqual([gap(MIA, 0, 30)]);
   });
 
@@ -355,27 +378,37 @@ describe("the gap's record", () => {
   // first pass that can make one starts it over, and the gap gets its young
   // day of attempts from then.
   test("starts over a record with no attempt once the primary is in its colo", async () => {
-    await addCandidateColo(world.handle(), MIA, T0_MS - 48 * HOUR_MS);
+    world.candidate(MIA, T0_MS - 48 * HOUR_MS);
     seedGap(gap(MIA, -48, null));
     world.primary = { colo: ORD, region: "ENAM" };
-    expect(creations(await at(0))).toBe(PROBE_ONLY);
+    expect(attempted(await at(0))).toBe(0);
     expect(await gaps()).toEqual([gap(MIA, -48, null)]);
 
+    // The gap is young again from this pass, for its probes as for its
+    // attempts, so the class probes through a hint that is waiting.
+    world.creator
+      .query(
+        "INSERT OR REPLACE INTO follow_hint_wait (region_hint, wait_ms, due_at_ms) VALUES ('enam', ?, ?)",
+      )
+      .run(4 * HOUR_MS, T0_MS + 4 * HOUR_MS);
     world.primary = { colo: MIA, region: "ENAM" };
-    expect(creations(await at(1))).toBe(ATTEMPTING);
+    const restarted = await at(1);
+    expect(restarted.regionHintsProbed).toEqual(["enam"]);
+    expect(attempted(restarted)).toBe(ATTEMPTS);
     expect(await gaps()).toEqual([gap(MIA, 1, 1)]);
-    expect(creations(await at(2))).toBe(ATTEMPTING);
+    expect(attempted(await at(2))).toBe(ATTEMPTS);
   });
 
-  // A primary whose region names no hint has no targeted attempt, so nothing
-  // begins the record. Once the region names one, the gap is new, and young.
-  test("begins only once the primary's region names a hint", async () => {
+  // A primary whose region names no hint has no targeted attempt, so the
+  // record its probe begins has none. Once the region names one, the attempts
+  // start the record over, and the gap is young for them.
+  test("starts over a probe's record once the primary's region names a hint", async () => {
     world.primary = { colo: MIA, region: "MARS" };
-    expect(creations(await at(0))).toBe(PROBE_ONLY);
-    expect(await gaps()).toEqual([]);
+    expect(attempted(await at(0))).toBe(0);
+    expect(await gaps()).toEqual([gap(MIA, 0, null)]);
 
     world.primary = { colo: MIA, region: "ENAM" };
-    expect(creations(await at(30))).toBe(ATTEMPTING);
+    expect(attempted(await at(30))).toBe(ATTEMPTS);
     expect(await gaps()).toEqual([gap(MIA, 30, 30)]);
   });
 
@@ -383,7 +416,7 @@ describe("the gap's record", () => {
   // anyway, over one the pass now holding the lease wrote or deleted. The
   // record is written before the attempt it records, naming the lease, so
   // the write is refused, the pass makes no attempt, and it reports the lease
-  // lost.
+  // lost. The record its probe began, while it held the lease, stands.
   test("is not written by a pass that lost its lease before attempting", async () => {
     let stolen = false;
     world.afterBatch = () => {
@@ -392,7 +425,7 @@ describe("the gap's record", () => {
           `SELECT count(*) AS n FROM follow_ledger WHERE kind = ${LEDGER_KIND.name_spent}`,
         )
         .get() as { n: number };
-      if (!stolen && n === PROBE_ONLY) {
+      if (!stolen && n === 1) {
         stolen = true;
         world.creator
           .query("UPDATE follow_pass SET holder = 'next-pass'")
@@ -401,9 +434,9 @@ describe("the gap's record", () => {
     };
     const report = await at(0);
     expect(stolen).toBe(true);
-    expect(creations(report)).toBe(PROBE_ONLY);
+    expect(attempted(report)).toBe(0);
     expect(report.leaseLost).toBe(true);
-    expect(await gaps()).toEqual([]);
+    expect(await gaps()).toEqual([gap(MIA, 0, null)]);
   });
 
   // An attempt is recorded before it is made, so a pass that stops after
@@ -425,17 +458,17 @@ describe("the gap's record", () => {
   });
 
   // The last attempt of a pass restores the slot while spares are still
-  // short. No attempt targeted the shortfall, so it has no record yet; the
-  // next pass's attempt at it begins one, young.
+  // short. No creation was made for the shortfall, so it has no record yet;
+  // the next pass's probe and attempts at it begin one, young.
   test("begins no record for a kind of gap no attempt targeted", async () => {
     const withSpare: ScriptedClass = { ...cls, spares: 1 };
     landings.splice(ATTEMPTS, 0, MIA);
     const restored = await at(0, withSpare);
     expect(restored.created.map((o) => o.colo)).toEqual([MIA]);
-    expect(creations(restored)).toBe(ATTEMPTING);
+    expect(attempted(restored)).toBe(ATTEMPTS);
     expect(await gaps()).toEqual([]);
 
-    expect(creations(await at(1, withSpare))).toBe(ATTEMPTING);
+    expect(attempted(await at(1, withSpare))).toBe(ATTEMPTS);
     expect(await gaps()).toEqual([gap(MIA, 1, 1, "spares")]);
   });
 

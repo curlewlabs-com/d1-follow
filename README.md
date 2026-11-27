@@ -331,21 +331,22 @@ invocations that overlap never fill the same gap twice:
   leaves the registry at once; one that does not answer leaves once its last
   answer from its colo is older than the verified window, since a single missed
   answer is not a move.
-- **Probe.** In act mode each class makes one creation through each region hint
-  every pass, whatever its gaps, intent before act. It takes the class's next
-  name number, then writes a creation intent under the exact name that number
-  makes; an attempt whose intent cannot be written does not run, and its number
-  stays taken. Then it addresses the name with the hint and asks the new object
-  where it is. An object that landed in a colo where its class has no slot
-  becomes a slot: the creator has it write its placement marker, then registers
-  it with the intent's outcome in one batch. Any other object holds no storage,
-  so it ceases on its own, and the outcome records its name as spent. An intent
-  left without an outcome, by an answer lost on the way back, is resolved on a
-  later pass by observing the name. A pass that cannot resolve a class's open
-  attempt makes no creation for that class, probes included, so an outage cannot
-  grow the open attempts past what one pass opens, its probes and attempts; its
-  learning and refilling wait with it. The pass whose creations first fail still
-  makes the rest of them.
+- **Probe.** In act mode each class makes one creation through a region hint in
+  the hint's round, and through every hint on every pass while the class has a
+  young gap ([Pacing the probes](#pacing-the-probes)), intent before act. It
+  takes the class's next name number, then writes a creation intent under the
+  exact name that number makes; an attempt whose intent cannot be written does
+  not run, and its number stays taken. Then it addresses the name with the hint
+  and asks the new object where it is. An object that landed in a colo where its
+  class has no slot becomes a slot: the creator has it write its placement
+  marker, then registers it with the intent's outcome in one batch. Any other
+  object holds no storage, so it ceases on its own, and the outcome records its
+  name as spent. An intent left without an outcome, by an answer lost on the way
+  back, is resolved on a later pass by observing the name. A pass that cannot
+  resolve a class's open attempt makes no creation for that class, probes
+  included, so an outage cannot grow the open attempts past what one pass opens,
+  its probes and attempts; its learning and refilling wait with it. The pass
+  whose creations first fail still makes the rest of them.
 - **Fill the gap beside the primary.** When a class that acts has no slot in the
   primary's colo, or fewer spares there than it keeps, the pass spends the rest
   of the class's attempts there, through the hint for the primary's region,
@@ -353,8 +354,7 @@ invocations that overlap never fill the same gap twice:
   hint gets none of these attempts: the probes are all that reach its colo.
   Attempts per class per pass are bounded, and the gap's age paces them: a gap
   is attempted on every pass while it is young, and once per cap after that
-  ([Pacing the attempts](#pacing-the-attempts)). The probes do not wait on that
-  pacing.
+  ([Pacing the attempts](#pacing-the-attempts)).
 - **Report gaps.** It reports each candidate colo with no verified slot of a
   class, and the primary's colo while it is no candidate.
 - **Release.** A slot is released only when it is out of the registry, is no
@@ -404,14 +404,14 @@ protected names and each lane's holder.
 **Candidate colos.** The creator assumes nothing about which colos host Durable
 Objects or how many there are. Its probes are at most a fixed number a pass, and
 most land beside a slot their class has. The day one lands where no creation has
-landed before, the colo joins the candidates and the probe is its class's first
-slot there: Cloudflare places objects there, so the primary could move there.
-The slots registered when the creator first runs are landings too, so their
-colos are the set it starts from. A colo stays a candidate once added, since the
-primary may come back to a colo it left; retiring one is an operator's decision.
-The ledger records the colo each creation landed in, which is what a colo's
-share of the landings, and a colo none has reached in a long time, are measured
-from.
+landed before, the colo joins the candidates, every hint's wait ends, and the
+probe is its class's first slot there: Cloudflare places objects there, so the
+primary could move there. The slots registered when the creator first runs are
+landings too, so their colos are the set it starts from, in either mode. A colo
+stays a candidate once added, since the primary may come back to a colo it left;
+retiring one is an operator's decision. The ledger records the colo each
+creation landed in, which is what a colo's share of the landings, and a colo
+none has reached in a long time, are measured from.
 
 **Names.** The creator names an object before it exists, so a name cannot say
 which colo it will land in. Each class's names are the adopting app's to choose:
@@ -428,24 +428,92 @@ A primary's colo that no creation reaches stays a gap, reported each pass. The
 fallback is a launch point there, which takes an operator request entering
 Cloudflare in that colo.
 
+### Pacing the probes
+
+Most probes land beside a slot their class already has, and teach the creator
+nothing. So each region hint's probes are paced by what they teach, under the
+cap the attempts take too, `CreatorConfig.maxBackoffMs`, and a class with a
+young gap keeps probing on every pass.
+
+- **Rounds.** A hint with no wait is in its round: every class that acts probes
+  through it on that pass. A round with at least one usable answer, a probe that
+  answered with the colo it landed in, and every such answer from a colo that
+  was already a candidate, doubles the hint's wait: two passes first, so a
+  single pass is skipped, then twice the last wait, up to the cap. A round with
+  no usable answer leaves the wait as it was. A probe whose answer was lost, or
+  that answered with no colo, counts for nothing in its round, whatever a later
+  pass finds.
+- **A new colo ends every wait.** Any creation that lands in a colo that was no
+  candidate, a probe, an attempt or one a later pass resolves, deletes every
+  hint's wait in the batch that adds the colo, and the pass that added it writes
+  no wait afterwards; its own rounds stay as they began, so every class in it is
+  paced alike, and the next pass's rounds are open to all of them. A hint just
+  added has no wait, so its first pass is a round.
+- **A young gap keeps its class probing.** A probe is a creation for every gap
+  its class has, so the pass that makes the first creation for a gap begins its
+  record ([Pacing the attempts](#pacing-the-attempts)). While the gap is younger
+  than the cap, its class probes through every hint on every pass, whatever
+  their waits. Those probes are no round and move no wait, though one that lands
+  in a new colo still ends every wait. Once the gap is old, its class probes
+  only in the hints' rounds, as a class with no gap does.
+- **Thresholds, not timers.** A wait ends on the first pass that begins at or
+  after it, less half a pass, as the attempts' thresholds do. The time between
+  two rounds is a whole number of passes, can run up to a pass past the cap, and
+  runs longer when passes are missed. A cap no longer than a pass and a half
+  paces nothing, since even a wait of the whole cap would end by the next pass:
+  every pass is a round, and no wait is written.
+- **State the pass cannot trust.** A wait longer than the cap, or due further
+  ahead than its own length, is dropped and the round runs, so a cap since
+  lowered, a clock that ran backward or a hand edit never silences the probes.
+- **Fenced by the lease.** Each write of a wait, and the batch that adds a colo
+  and deletes the waits, names the pass lease in its own statements, so a pass
+  that stalled and lost its lease cannot put back a wait the pass holding it
+  deleted.
+- **Dry-run** makes no probe and writes no wait, and logs the hints it would
+  probe through. A pass with every class in dry-run still adds a registered
+  slot's colo to the candidates, so the colo is not lost if the slot then
+  leaves, but ends no wait, and reports that as a failure while a wait stands. A
+  pass's report names the hints a class that acts probed through
+  (`regionHintsProbed`), beside every hint the creator holds (`regionHints`).
+
+What the cap bounds is the cost of a steady day: a hint whose rounds teach
+nothing is probed once per class per cap, where it was probed once per class per
+pass. It does not bound how long learning a new colo takes. As an estimate, with
+independent landings, a one-day cap and two classes: a colo taking a fifth of a
+hint's landings is learned within a day about one time in three, within three
+days about three times in four, and within a week about 19 times in 20, where a
+probe on every pass learned it within hours. A primary that moves into a colo no
+creation has reached does not wait on that: its colo is a gap from the pass that
+sees it, and the gap is young.
+
+That is the trade, and one cap carries both sides of it: the longer the cap, the
+cheaper a steady day and the slower a new colo is learned, and the longer a
+fresh gap keeps its class probing and attempting on every pass.
+
 ### Pacing the attempts
 
 The attempts at the gap in the primary's colo are paced by the gap's age, under
 one cap, `CreatorConfig.maxBackoffMs`. A gap is young for the cap from the pass
-that made the first attempt at it, and is attempted on every pass while it is
-young. After that it is attempted when the cap has passed since its last
-attempt. A fresh gap gets the full attempt rate while a move most needs it
-filled, and a colo the hint seldom reaches costs one round of attempts per cap
-once its first cap has passed. At an hourly pass and a one-day cap, a gap no
-attempt fills gets about 24 rounds in its first day and one a day after.
+that made the first creation for it, its class's probe or an attempt at it, and
+is attempted on every pass while it is young. After that it is attempted when
+the cap has passed since its last attempt. A fresh gap gets the full attempt
+rate while a move most needs it filled, and a colo the hint seldom reaches costs
+one round of attempts per cap once its first cap has passed. At an hourly pass
+and a one-day cap, a gap no attempt fills gets about 24 rounds in its first day
+and one a day after.
 
-- **The record.** The pass that makes a gap's first attempt records when it
-  began, and each pass that attempts it records that attempt, before making it,
-  as a creation's intent comes before the creation: a pass that stops partway
-  has recorded what it attempted, and fails toward fewer attempts, never more. A
-  gap's age is wall time from its first attempt, whether or not later passes can
-  create: a class in dry-run, or one with an attempt left open, makes no
-  attempt, and its gap ages all the same.
+- **The record.** The pass that makes a gap's first creation records when it
+  began, and each pass that attempts it records that attempt, each before the
+  creation, as a creation's intent comes before the creation: a pass that stops
+  partway has recorded what it created, and fails toward fewer attempts, never
+  more. A gap's age is wall time from its first creation, whether or not later
+  passes can create: a class in dry-run, or one with an attempt left open, makes
+  no creation, and its gap ages all the same.
+- **Young again.** A record no attempt has followed since it began has paced no
+  attempt: a probe began it while the primary was elsewhere, or while the
+  primary's region named no hint. The first pass that can attempt the gap starts
+  the record over, and the gap is young again from then, for its class's probes
+  as for its attempts.
 - **Its end.** A pass deletes a gap's record when it sees the gap filled, or
   sees that the class no longer has it: a colo that is neither a candidate nor
   the primary's, or a shortfall of spares in a colo the primary has left. A gap
@@ -457,9 +525,11 @@ attempt fills gets about 24 rounds in its first day and one a day after.
   attempts once the slot beside the primary is lost too, and a probe that
   restores the slot leaves the remaining shortfall a fresh gap. The pass reads
   the gap after its probes, so a probe that changes it counts before any
-  attempt. A pass that cannot read where the primary is makes no attempts and
-  leaves every record as it is, since it cannot tell which colo the attempts are
-  for, or whether a shortfall of spares is still one.
+  attempt. A pass that cannot read where the primary is makes no attempts, since
+  it cannot tell which colo the attempts are for, or whether a shortfall of
+  spares is still one. It deletes only the record of a missing slot the class
+  now holds, which is closed or a shortfall of spares, a new gap either way, and
+  leaves every other record as it is.
 - **Thresholds, not timers.** Each threshold is read by a pass: it ends on the
   first pass that begins at or after it, less half a pass, so a cron that fires
   a little early is not taken for one that came too soon. The time between two
@@ -654,13 +724,14 @@ The tool's state is split by who reads it on a hot path:
   appends to the change log in the batch that swaps the record.
 - **The creator's database: the registry, its spares, the ledger, the modes, and
   the creator's own working state** (the candidate colos, the region hints it
-  added, the name counter, the open creation intents, the objects waiting for
-  release, the record of each gap the pass has attempted, and the pass lease).
-  An overdue accept can trigger a standby lookup. A stateless object reads the
-  registry and its mode in the background, cached, at most once every ten
-  minutes. A lane reads them only when its run reaches the threshold. The
-  creator and the audit read them on their own schedules. The app binds the
-  creator's database for those reads. Its mutation receivers enforce the
+  added, each hint's wait before its next round of probes, the name counter, the
+  open creation intents, the objects waiting for release, the record of each gap
+  a pass has created for, and the pass lease). An overdue accept can trigger a
+  standby lookup. A stateless object reads the registry and its mode in the
+  background, cached, at most once every ten minutes. A lane reads them only
+  when its run reaches the threshold. The creator and the audit read them on
+  their own schedules. The app binds the creator's database for those reads. Its
+  mutation receivers enforce the
   [placement guard](#guard-placement-and-release).
 
 The creator copies each lane change from the change log into the ledger on its

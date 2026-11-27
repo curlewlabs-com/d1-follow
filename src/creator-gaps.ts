@@ -1,9 +1,13 @@
-// When a pass attempts the gap in the primary's colo (README sec."The creator:
-// making and keeping slots"): read from the gap's record (gap-store.ts) and
-// the cap, CreatorConfig.maxBackoffMs. A gap is young for the cap from the
-// pass that made its first creation, and attempted on every pass while it is;
-// once old, it is attempted when the cap has passed since its last attempt.
+// What a gap's record (gap-store.ts) makes due, under the cap,
+// CreatorConfig.maxBackoffMs (README sec."The creator: making and keeping
+// slots"): the attempts at the gap in the primary's colo, and whether the gap
+// keeps its class probing on every pass. A gap is young for the cap from the
+// pass that made its first creation, a probe or an attempt. While it is young
+// its class probes on every pass and the attempts at it run on every pass;
+// once old, it is attempted when the cap has passed since its last attempt,
+// and its class probes only in the hints' rounds (creator-hints.ts).
 import type { GapRecord } from "./gap-store";
+import { passReading, type PassClock } from "./pass-clock";
 
 export interface AttemptPacing {
   readonly due: boolean;
@@ -18,18 +22,23 @@ export interface AttemptPacing {
   readonly dueAtMs: number | null;
 }
 
-// What `record` makes of the pass that began at `passStartMs`. A threshold is
-// read by a pass, never timed: it ends on the first pass that begins at or
-// after it, less half a pass, so a cron that fires a little early is not taken
-// for one that came too soon. The time between attempts once a gap is old is
-// a whole number of passes, and can run up to a pass past the cap.
+// A time ahead of the pass, or an attempt before the record began, is a clock
+// that ran backward or a hand edit. Trusting it could hold the creations back
+// for as long as it says, so the record is dropped instead.
+export function untrustedGap(record: GapRecord, passStartMs: number): boolean {
+  const { begunAtMs, attemptedAtMs } = record;
+  return (
+    begunAtMs > passStartMs ||
+    (attemptedAtMs !== null &&
+      (attemptedAtMs < begunAtMs || attemptedAtMs > passStartMs))
+  );
+}
+
+// What `record` makes of the attempts in the pass that began at
+// `at.passStartMs`.
 export function paceAttempts(
   record: GapRecord | undefined,
-  at: {
-    readonly passStartMs: number;
-    readonly capMs: number;
-    readonly passIntervalMs: number;
-  },
+  at: PassClock,
 ): AttemptPacing {
   const { passStartMs } = at;
   const fresh = (reason: "new" | "untrusted" | "restarted"): AttemptPacing => ({
@@ -39,28 +48,32 @@ export function paceAttempts(
     dueAtMs: null,
   });
   if (record === undefined) return fresh("new");
+  if (untrustedGap(record, passStartMs)) return fresh("untrusted");
   const { begunAtMs, attemptedAtMs } = record;
-  // A time ahead of the pass, or an attempt before the record began, is a
-  // clock that ran backward or a hand edit. Trusting it could hold the
-  // attempts back for as long as it says, so the record is dropped instead.
-  if (
-    begunAtMs > passStartMs ||
-    (attemptedAtMs !== null &&
-      (attemptedAtMs < begunAtMs || attemptedAtMs > passStartMs))
-  ) {
-    return fresh("untrusted");
-  }
   // A record with no attempt through the primary's hint since it began has
   // paced none, so the attempts start it over: their young day begins with
   // the first pass that can make one.
   if (attemptedAtMs === null) return fresh("restarted");
-  const passReading = (thresholdMs: number): number =>
-    thresholdMs - at.passIntervalMs / 2;
-  if (passStartMs < passReading(begunAtMs + at.capMs)) {
+  if (passStartMs < passReading(begunAtMs + at.capMs, at.passIntervalMs)) {
     return { due: true, begunAtMs, reason: "young", dueAtMs: null };
   }
-  const dueAtMs = passReading(attemptedAtMs + at.capMs);
+  const dueAtMs = passReading(attemptedAtMs + at.capMs, at.passIntervalMs);
   return passStartMs >= dueAtMs
     ? { due: true, begunAtMs, reason: "old", dueAtMs: null }
     : { due: false, begunAtMs, reason: "waiting", dueAtMs };
+}
+
+// Whether a gap keeps its class probing through every hint in the pass that
+// began at `at.passStartMs`, whatever the hints' waits: a gap no pass has
+// created for, or whose record the pass cannot trust, does, as a young gap
+// does. Age alone is never a reason to distrust a record; an old gap is old.
+export function keepsProbing(
+  record: GapRecord | undefined,
+  at: PassClock,
+): boolean {
+  return (
+    record === undefined ||
+    untrustedGap(record, at.passStartMs) ||
+    at.passStartMs < passReading(record.begunAtMs + at.capMs, at.passIntervalMs)
+  );
 }

@@ -250,6 +250,14 @@ export class CreatorWorld {
     });
   }
 
+  // A candidate colo as an earlier pass left it: the store's own add takes the
+  // pass lease, which no pass holds between passes.
+  candidate(colo: Colo, atMs: number): void {
+    this.creator
+      .query("INSERT INTO follow_colo (colo, added_at_ms) VALUES (?, ?)")
+      .run(colo, atMs);
+  }
+
   async seed(
     name: string,
     colo: Colo,

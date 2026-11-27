@@ -7,21 +7,89 @@ import {
   readCandidateColos,
   readRegionHints,
 } from "./candidate-store";
-import { CreatorWorld, DEN, MIA, ORD, T0_MS } from "./creator-test-harness";
+import {
+  CreatorWorld,
+  DEN,
+  HOUR_MS,
+  MIA,
+  ORD,
+  T0_MS,
+} from "./creator-test-harness";
+import { readHintWaits, writeHintWait } from "./hint-wait-store";
+import { claimPass } from "./pass-lease";
 
-// A pass that lost its lease can write a colo or hint that the pass holding it
-// writes too. The order each joined is the order a pass reports them in, so a
-// second write must keep the first one's place rather than move or repeat it.
+const HOLDER = "pass-1";
+
+async function leased(): Promise<CreatorWorld> {
+  const world = await CreatorWorld.open();
+  await claimPass(world.handle(), {
+    holder: HOLDER,
+    nowMs: T0_MS,
+    leaseMs: HOUR_MS,
+  });
+  return world;
+}
+
+// A colo or hint can be written again by a later pass, or a hint by a pass
+// that lost its lease. The order each joined is the order a pass reports them
+// in, so a second write must keep the first one's place rather than move or
+// repeat it.
 test("a colo or hint added twice keeps its first place", async () => {
-  const db = (await CreatorWorld.open()).handle();
-  await addCandidateColo(db, ORD, T0_MS + 2);
-  await addCandidateColo(db, MIA, T0_MS + 1);
-  await addCandidateColo(db, DEN, T0_MS + 1);
-  await addCandidateColo(db, MIA, T0_MS + 3);
+  const db = (await leased()).handle();
+  await addCandidateColo(db, ORD, T0_MS + 2, HOLDER, true);
+  await addCandidateColo(db, MIA, T0_MS + 1, HOLDER, true);
+  await addCandidateColo(db, DEN, T0_MS + 1, HOLDER, true);
+  await addCandidateColo(db, MIA, T0_MS + 3, HOLDER, true);
   expect(await readCandidateColos(db)).toEqual([DEN, MIA, ORD]);
 
   await addRegionHint(db, "weur", T0_MS + 1);
   await addRegionHint(db, "wnam", T0_MS + 2);
   await addRegionHint(db, "weur", T0_MS + 3);
   expect(await readRegionHints(db)).toEqual(["weur", "wnam"]);
+});
+
+// A new colo says the hints have more to teach, so its add ends every hint's
+// wait in the same batch: a pass that stopped between the two would otherwise
+// leave a hint waiting a day after its probe found somewhere new.
+test("adding a colo deletes every hint's wait in its batch", async () => {
+  const db = (await leased()).handle();
+  for (const regionHint of ["enam", "weur"]) {
+    await writeHintWait(
+      db,
+      { regionHint, waitMs: 2 * HOUR_MS, dueAtMs: T0_MS + 2 * HOUR_MS },
+      HOLDER,
+    );
+  }
+  expect(await addCandidateColo(db, DEN, T0_MS, HOLDER, true)).toBe(true);
+  expect(await readHintWaits(db)).toEqual([]);
+});
+
+// The risk this guards: a pass that stalled past its lease adding a colo, or
+// deleting the waits, after the pass holding the lease has set one.
+test("a pass without the lease adds no colo and deletes no wait", async () => {
+  const db = (await leased()).handle();
+  const wait = {
+    regionHint: "enam",
+    waitMs: 2 * HOUR_MS,
+    dueAtMs: T0_MS + 2 * HOUR_MS,
+  };
+  await writeHintWait(db, wait, HOLDER);
+  expect(await addCandidateColo(db, DEN, T0_MS, "pass-0", true)).toBe(false);
+  expect(await readCandidateColos(db)).toEqual([]);
+  expect(await readHintWaits(db)).toEqual([wait]);
+});
+
+// A pass in which no class acts writes none of the pacing's state, so its add
+// leaves every wait as it was.
+test("adding a colo without ending the waits leaves them", async () => {
+  const db = (await leased()).handle();
+  const wait = {
+    regionHint: "enam",
+    waitMs: 2 * HOUR_MS,
+    dueAtMs: T0_MS + 2 * HOUR_MS,
+  };
+  await writeHintWait(db, wait, HOLDER);
+  expect(await addCandidateColo(db, DEN, T0_MS, HOLDER, false)).toBe(true);
+  expect(await readCandidateColos(db)).toEqual([DEN]);
+  expect(await readHintWaits(db)).toEqual([wait]);
 });

@@ -11,27 +11,63 @@ import {
 } from "./candidate-store";
 import type { Colo } from "./colo";
 import type { SqlDatabase } from "./creator-store";
+import { LeaseLost } from "./pass-lease";
 import type { PrimaryPlacement } from "./primary-colo";
 
 // The candidate colos as the pass knows them: read once, and added to as the
-// pass learns, so a colo learned in one pass is the next pass's to read.
+// pass learns, so a colo learned in one pass is the next pass's to read. Each
+// add is written for `holder`, the pass lease's holder, and deletes every
+// hint's wait (candidate-store.ts).
 export class PassCandidates {
+  // Whether this pass added a colo, after which it writes no hint's wait.
+  private added = false;
+
   private constructor(
     private readonly db: SqlDatabase,
+    private readonly holder: string,
     private readonly colos: Colo[],
   ) {}
 
   // The stored candidates, with every colo a slot is registered in: a slot is
   // an object that landed there, so its colo joins the first time a pass reads
-  // it, and stays a candidate after the slot leaves, its gap reported.
+  // it, and stays a candidate after the slot leaves, its gap reported. Adding
+  // one ends every hint's wait, which dry-run must not do, so a pass in which
+  // no class acts (`acts` false) adds the colo and leaves every wait as it
+  // was. While a wait stands (`waitsStand`) it reports that through `fail`,
+  // since the waits then do not know of the colo; with none, as on a fresh
+  // creator's first passes, the add is an ordinary one.
   static async load(
     db: SqlDatabase,
+    holder: string,
     registered: Iterable<Colo>,
-    atMs: number,
-    log: (line: string) => void,
+    pass: {
+      readonly atMs: number;
+      readonly acts: boolean;
+      readonly waitsStand: boolean;
+      readonly log: (line: string) => void;
+      readonly fail: (line: string) => void;
+    },
   ): Promise<PassCandidates> {
-    const candidates = new PassCandidates(db, await readCandidateColos(db));
+    const { atMs, log } = pass;
+    const candidates = new PassCandidates(
+      db,
+      holder,
+      await readCandidateColos(db),
+    );
     for (const colo of new Set(registered)) {
+      if (!pass.acts) {
+        if (!(await candidates.record(colo, atMs, false))) continue;
+        if (pass.waitsStand) {
+          pass.fail(
+            `dry-run - candidate colo ${colo} added, where a slot is registered, and every hint's wait left as it was: dry-run writes no pacing state`,
+          );
+        } else {
+          log(
+            `[follow] candidate colo ${colo} added - a slot is registered there`,
+          );
+        }
+        continue;
+      }
       if (await candidates.add(colo, atMs)) {
         log(
           `[follow] candidate colo ${colo} added - a slot is registered there`,
@@ -46,14 +82,37 @@ export class PassCandidates {
   }
 
   // A creation that lands where no creation or slot has been is how the
-  // creator learns Cloudflare places objects there. True when `colo` joined.
+  // creator learns Cloudflare places objects there. True when `colo` joined;
+  // throws LeaseLost, having written nothing, when the pass lost its lease.
+  // The add counts as made once its batch is sent: a batch that committed
+  // and lost its answer has deleted every wait, which this pass must then
+  // not write again.
   async add(colo: Colo | null, atMs: number): Promise<boolean> {
+    return await this.record(colo, atMs, true);
+  }
+
+  // Adds `colo`, ending every hint's wait only with `endWaits`; true when it
+  // joined.
+  private async record(
+    colo: Colo | null,
+    atMs: number,
+    endWaits: boolean,
+  ): Promise<boolean> {
     if (colo === null || this.colos.includes(colo)) {
       return false;
     }
-    await addCandidateColo(this.db, colo, atMs);
+    if (endWaits) this.added = true;
+    if (!(await addCandidateColo(this.db, colo, atMs, this.holder, endWaits))) {
+      throw new LeaseLost();
+    }
     this.colos.push(colo);
     return true;
+  }
+
+  // True once this pass has sent a colo's add, which deletes every hint's
+  // wait.
+  get addedAny(): boolean {
+    return this.added;
   }
 
   // The colos the pass judges its gaps over: every candidate, and the

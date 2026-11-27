@@ -2,22 +2,25 @@
 // (schema/creator.sql's follow_colo and follow_region_hint): the colos it keeps
 // a slot of each class in, and the region hints it probes through beyond the
 // app's own. Nothing else in the creator database reads or writes either
-// table.
+// table; adding a colo also deletes every hint's wait (hint-wait-store.ts), in
+// the same batch.
 import { parseColo, type Colo } from "./colo";
 import {
   CreatorStoreError,
   field,
+  returnedRows,
   stringField,
   type SqlDatabase,
 } from "./creator-store";
+import { HINT_WAIT_SQL } from "./hint-wait-store";
+import { HOLDS_PASS_LEASE } from "./pass-lease";
 
 // Every statement this module runs, for the store's query-plan test beside
 // CREATOR_SQL's. Each table holds a row per colo or hint Cloudflare places
 // objects in, so a full read is a handful of rows.
 export const CANDIDATE_SQL = {
   readColos: "SELECT colo FROM follow_colo ORDER BY added_at_ms, colo",
-  addColo:
-    "INSERT INTO follow_colo (colo, added_at_ms) VALUES (?, ?) ON CONFLICT (colo) DO NOTHING",
+  addColo: `INSERT INTO follow_colo (colo, added_at_ms) SELECT ?, ? WHERE ${HOLDS_PASS_LEASE} ON CONFLICT (colo) DO NOTHING`,
   readRegionHints:
     "SELECT region_hint FROM follow_region_hint ORDER BY added_at_ms, region_hint",
   addRegionHint:
@@ -38,14 +41,32 @@ export async function readCandidateColos(db: SqlDatabase): Promise<Colo[]> {
   });
 }
 
-// Adds a candidate colo; adding one already there changes nothing, so a pass
-// that lost its lease writing one leaves nothing another pass relies on.
+// Adds a candidate colo while `holder` holds the pass lease, and, with
+// `endWaits`, in the same batch deletes every hint's wait: a colo nobody knew
+// Cloudflare places objects in says the hints have more to teach. A pass in
+// which no class acts adds without it, since dry-run writes none of the
+// pacing's state. Adding one already there changes nothing but the waits.
+// False when `holder` does not hold the lease, and nothing was written: like
+// every write of the pacing's state, it acts only for the pass that holds the
+// lease.
 export async function addCandidateColo(
   db: SqlDatabase,
   colo: Colo,
   atMs: number,
-): Promise<void> {
-  await db.prepare(CANDIDATE_SQL.addColo).bind(colo, atMs).run();
+  holder: string,
+  endWaits: boolean,
+): Promise<boolean> {
+  const results = await db.batch([
+    db.prepare(CANDIDATE_SQL.addColo).bind(colo, atMs, holder),
+    ...(endWaits
+      ? [db.prepare(HINT_WAIT_SQL.deleteEveryWait).bind(holder)]
+      : []),
+    db.prepare(HINT_WAIT_SQL.holdsLease).bind(holder),
+  ]);
+  return (
+    returnedRows(results[results.length - 1], "colo add's lease check").length >
+    0
+  );
 }
 
 // The hints added beyond the app's own, in the order they were added.

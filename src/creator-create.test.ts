@@ -91,8 +91,9 @@ describe("probing", () => {
   });
 
   // The registered slots' colos are where objects have landed already, so
-  // they are the set the creator starts from. One stays a candidate once its
-  // slot leaves, or its gap would go unreported.
+  // they are the set the creator starts from, in either mode. One stays a
+  // candidate once its slot leaves, or its gap would go unreported, even
+  // when the slot leaves in the dry-run pass that recorded its colo.
   test("keeps a registered slot's colo a candidate after the slot leaves", async () => {
     await world.seed("scheduler-ord", ORD, T0_MS - HOUR_MS);
     const cls = scriptedClass([]);
@@ -198,8 +199,9 @@ describe("region hints", () => {
 
   // A primary whose region names no hint gives no hint to attempt its gap
   // through. Attempting through the app's own would be a guess that spends
-  // the budget, and a record it began would age the gap before the right hint
-  // could reach it; the probe still runs.
+  // the budget; the probe still runs. The record the probe begins has no
+  // attempt, so it does not age the gap for the attempts: they start it over
+  // once a hint can reach it (creator-gaps.test.ts).
   test("attempts no gap beside a primary whose region names no hint", async () => {
     await world.act();
     world.primary = { colo: DEN, region: "MARS" };
@@ -209,7 +211,15 @@ describe("region hints", () => {
     const report = await world.pass(cls);
     expect(report.spent.map((o) => o.name)).toEqual(["scheduler-test-enam-1"]);
     expect(report.gaps).toEqual([{ classCode: SCHEDULER, colo: DEN }]);
-    expect(await readGaps(world.handle())).toEqual([]);
+    expect(await readGaps(world.handle())).toEqual([
+      {
+        classCode: SCHEDULER,
+        colo: DEN,
+        kind: "slot",
+        begunAtMs: T0_MS,
+        attemptedAtMs: null,
+      },
+    ]);
   });
 
   // The primary read is the pass's first call on the app database; a failure

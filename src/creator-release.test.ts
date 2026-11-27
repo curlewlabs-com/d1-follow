@@ -3,7 +3,6 @@
 // creator-test-harness.ts sets up.
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { CreatorClass } from "./creator";
-import { addCandidateColo } from "./candidate-store";
 import { readReleasePending } from "./creator-store";
 import { LANE_HANDOFF_SETTLE_MS } from "./lane";
 import {
@@ -74,7 +73,7 @@ describe("releasing", () => {
   // while the slot was still registered and a handoff could still pick it.
   test("starts the settle time when a slot leaves, after a slow mark", async () => {
     await world.act();
-    await addCandidateColo(world.handle(), IAD, T0_MS - HOUR_MS);
+    world.candidate(IAD, T0_MS - HOUR_MS);
     await world.seed("scheduler-moved", MIA, T0_MS - HOUR_MS);
     const cls = scriptedClass([ORD]);
     cls.where.set("scheduler-moved", IAD);

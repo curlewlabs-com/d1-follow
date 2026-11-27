@@ -181,6 +181,24 @@ CREATE TABLE IF NOT EXISTS follow_region_hint (
   added_at_ms INTEGER NOT NULL
 ) STRICT;
 
+-- Each region hint's wait before its next round of probes (README sec."Pacing
+-- the probes"), keyed by the hint. A hint with no row is probed through by
+-- every class on every pass. A round whose probes all land in colos already
+-- candidates doubles the wait, up to the cap; a creation that lands in a new
+-- colo deletes every row in the batch that adds the colo.
+CREATE TABLE IF NOT EXISTS follow_hint_wait (
+  -- The hint as the pass hands it to the app's calls, the app's own included,
+  -- so it takes whatever form the app's configuration gives it.
+  region_hint TEXT PRIMARY KEY CHECK (length(region_hint) > 0),
+  -- Each time is held to the integers a pass reads exactly, as follow_gap's
+  -- are, so no row can stop the pass that reads it (src/creator-hints.ts drops
+  -- a wait it cannot trust).
+  wait_ms INTEGER NOT NULL CHECK (wait_ms BETWEEN 1 AND 9007199254740991),
+  -- When the next round is due: the start of the pass that set the wait, plus
+  -- the wait.
+  due_at_ms INTEGER NOT NULL CHECK (due_at_ms BETWEEN 0 AND 9007199254740991)
+) STRICT;
+
 -- Each class's wait before attempting a gap in the primary's colo again, as
 -- builds before follow_gap paced those attempts. No pass reads or writes it now.
 -- It stays because a schema change here is additive only, and an older build
@@ -192,12 +210,13 @@ CREATE TABLE IF NOT EXISTS follow_backoff (
 ) STRICT;
 
 -- The gaps a pass has made a creation for (README sec."The creator: making and
--- keeping slots"), which pace the attempts at the gap in the primary's colo. A
--- class has a gap in each candidate colo where it has no slot, and in the
--- primary's colo while it has no slot there or fewer spares than it keeps. A
--- gap no pass has created for has no row. A pass deletes the row once it sees
--- the gap filled, gone, or of another kind, so a gap that returns, or a lost
--- slot where only spares were short, is a new one.
+-- keeping slots"), which pace the attempts at the gap in the primary's colo,
+-- and keep a young gap's class probing through every hint. A class has a gap
+-- in each candidate colo where it has no slot, and in the primary's colo while
+-- it has no slot there or fewer spares than it keeps. A gap no pass has created
+-- for has no row. A pass deletes the row once it sees the gap filled, gone, or
+-- of another kind, so a gap that returns, or a lost slot where only spares were
+-- short, is a new one.
 CREATE TABLE IF NOT EXISTS follow_gap (
   class_code INTEGER NOT NULL CHECK (class_code > 0),
   colo TEXT NOT NULL CHECK (colo GLOB '[A-Z][A-Z][A-Z]'),

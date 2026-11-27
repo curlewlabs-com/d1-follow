@@ -5,7 +5,6 @@
 // second slot of a class in a colo.
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { Colo } from "./colo";
-import { addCandidateColo } from "./candidate-store";
 import { LEDGER_KIND, readReleasePending, readSlots } from "./creator-store";
 import {
   CreatorWorld,
@@ -29,7 +28,7 @@ beforeEach(async () => {
   await world.seed("scheduler-moved", ORD, T0_MS - HOUR_MS);
   cls.where.set("scheduler-moved", IAD);
   cls.marked.set("scheduler-moved", ORD);
-  await addCandidateColo(world.handle(), IAD, T0_MS - HOUR_MS);
+  world.candidate(IAD, T0_MS - HOUR_MS);
 });
 
 function ledger(): { kind: number; colo: string; detail: string | null }[] {
@@ -121,7 +120,7 @@ describe("a slot that answers from another colo", () => {
   test("is taken out without a mark in dry-run", async () => {
     const dry = await CreatorWorld.open();
     await dry.seed("scheduler-moved", ORD, T0_MS - HOUR_MS);
-    await addCandidateColo(dry.handle(), IAD, T0_MS - HOUR_MS);
+    dry.candidate(IAD, T0_MS - HOUR_MS);
     const report = await dry.pass(cls);
     expect(report.moved).toEqual([]);
     expect(report.unregistered.map((s) => s.name)).toEqual(["scheduler-moved"]);
