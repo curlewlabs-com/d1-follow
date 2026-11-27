@@ -47,7 +47,7 @@ export async function readCandidateColos(db: SqlDatabase): Promise<Colo[]> {
 // batch deletes every hint's wait: a colo nobody knew Cloudflare places objects
 // in says the hints have more to teach. Adding one already there changes
 // nothing but the waits. False when `holder` does not hold the lease, and
-// nothing was written: like every write of the pacing's state, it acts only for
+// nothing was written: like every write of the hints' waits, it acts only for
 // the pass that holds the lease.
 export async function addCandidateColo(
   db: SqlDatabase,
