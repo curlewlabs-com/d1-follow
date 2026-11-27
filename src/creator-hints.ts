@@ -27,16 +27,24 @@ function pacesNothing(at: PassClock): boolean {
 // What `wait` makes of the hint in the pass that began at `at.passStartMs`.
 // A wait longer than the cap, or due further ahead than its own length, is a
 // cap since lowered, a clock that ran backward or a hand edit; trusting it
-// could hold the probes back for as long as it says, so it is dropped. Under
-// a cap that paces nothing every pass is a round.
+// could hold the probes back for as long as it says, so it is dropped. So is
+// a wait set before `learnedAtMs`, when the newest candidate colo joined: the
+// round that set it did not know of that colo, as when a pass with every
+// class in dry-run, or an older build, added the colo and ended no wait.
+// Under a cap that paces nothing every pass is a round.
 export function paceHint(
   wait: HintWait | undefined,
   at: PassClock,
+  learnedAtMs: number | null,
 ): HintPacing {
   if (wait === undefined) {
     return { round: true, reason: "none", waitMs: null, dueAtMs: null };
   }
-  if (wait.waitMs > at.capMs || wait.dueAtMs - at.passStartMs > wait.waitMs) {
+  if (
+    wait.waitMs > at.capMs ||
+    wait.dueAtMs - at.passStartMs > wait.waitMs ||
+    (learnedAtMs !== null && wait.dueAtMs - wait.waitMs < learnedAtMs)
+  ) {
     return { round: true, reason: "untrusted", waitMs: null, dueAtMs: null };
   }
   if (pacesNothing(at)) {

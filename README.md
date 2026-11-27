@@ -465,6 +465,12 @@ young gap keeps probing on every pass.
 - **State the pass cannot trust.** A wait longer than the cap, or due further
   ahead than its own length, is dropped and the round runs, so a cap since
   lowered, a clock that ran backward or a hand edit never silences the probes.
+  So is a wait set before the newest candidate colo joined: the round that set
+  it did not know of the colo, as when a pass with every class in dry-run, or an
+  older build, added it and ended no wait. A pass in which a class acts also
+  deletes the wait of a hint the creator no longer probes through, such as an
+  app hint its configuration has since changed, so the hint's first round is
+  open if it comes back.
 - **Fenced by the lease.** Each write of a wait, and the batch that adds a colo
   and deletes the waits, names the pass lease in its own statements, so a pass
   that stalled and lost its lease cannot put back a wait the pass holding it
@@ -472,9 +478,10 @@ young gap keeps probing on every pass.
 - **Dry-run** makes no probe and writes no wait, and logs the hints it would
   probe through. A pass with every class in dry-run still adds a registered
   slot's colo to the candidates, so the colo is not lost if the slot then
-  leaves, but ends no wait, and reports that as a failure while a wait stands. A
-  pass's report names the hints a class that acts probed through
-  (`regionHintsProbed`), beside every hint the creator holds (`regionHints`).
+  leaves, but ends no wait, and reports that as a failure while a wait stands;
+  the first pass in which a class acts drops each such wait. A pass's report
+  names the hints a class that acts probed through (`regionHintsProbed`), beside
+  every hint the creator holds (`regionHints`).
 
 What the cap bounds is the cost of a steady day: a hint whose rounds teach
 nothing is probed once per class per cap, where it was probed once per class per
@@ -503,18 +510,19 @@ and a one-day cap, a gap no attempt fills gets about 24 rounds in its first day
 and one a day after.
 
 - **The record.** The pass that makes a gap's first creation records when it
-  began, and each pass that attempts it records that attempt, each before the
-  creation, as a creation's intent comes before the creation: a pass that stops
-  partway has recorded what it created, and fails toward fewer attempts, never
-  more. A gap's age is wall time from its first creation, whether or not later
-  passes can create: a class in dry-run, or one with an attempt left open, makes
-  no creation, and its gap ages all the same.
+  began, and each pass that attempts it records that attempt, each in the batch
+  that writes the creation's intent, before its call: neither stands without the
+  other, and a pass that stops partway has recorded what it created, and fails
+  toward fewer attempts, never more. A gap's age is wall time from its first
+  creation, whether or not later passes can create: a class in dry-run, or one
+  with an attempt left open, makes no creation, and its gap ages all the same.
 - **Young again.** A record no attempt has followed since it began has paced no
   attempt: a probe began it while the primary was elsewhere, or while the
   primary's region named no hint. The first pass that can attempt the gap starts
   the record over, and the gap is young again from then, for its class's probes
   as for its attempts.
-- **Its end.** A pass deletes a gap's record when it sees the gap filled, or
+- **Its end.** A pass deletes a gap's record when it sees the gap filled, in the
+  batch that registers the slot, or the last spare, that fills it, or when it
   sees that the class no longer has it: a colo that is neither a candidate nor
   the primary's, or a shortfall of spares in a colo the primary has left. A gap
   that returns is a new one, young again.

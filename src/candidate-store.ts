@@ -8,6 +8,7 @@ import { parseColo, type Colo } from "./colo";
 import {
   CreatorStoreError,
   field,
+  integerField,
   returnedRows,
   stringField,
   type SqlDatabase,
@@ -20,6 +21,7 @@ import { HOLDS_PASS_LEASE } from "./pass-lease";
 // objects in, so a full read is a handful of rows.
 export const CANDIDATE_SQL = {
   readColos: "SELECT colo FROM follow_colo ORDER BY added_at_ms, colo",
+  newestColoAt: "SELECT MAX(added_at_ms) AS added_at_ms FROM follow_colo",
   addColo: `INSERT INTO follow_colo (colo, added_at_ms) SELECT ?, ? WHERE ${HOLDS_PASS_LEASE} ON CONFLICT (colo) DO NOTHING`,
   readRegionHints:
     "SELECT region_hint FROM follow_region_hint ORDER BY added_at_ms, region_hint",
@@ -67,6 +69,18 @@ export async function addCandidateColo(
     returnedRows(results[results.length - 1], "colo add's lease check").length >
     0
   );
+}
+
+// When the newest candidate colo joined, or null with none: a hint's wait set
+// before then was set by a round that did not know of that colo.
+export async function readNewestCandidateAtMs(
+  db: SqlDatabase,
+): Promise<number | null> {
+  const { results } = await db.prepare(CANDIDATE_SQL.newestColoAt).all();
+  const [row] = results;
+  return row === undefined || field(row, "added_at_ms") === null
+    ? null
+    : integerField(row, "added_at_ms");
 }
 
 // The hints added beyond the app's own, in the order they were added.

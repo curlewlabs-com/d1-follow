@@ -14,6 +14,7 @@
 // logs what they would do.
 import { readLaneChangesAfter, readLaneHolders } from "./app-lane-reads";
 import type { Colo } from "./colo";
+import { readNewestCandidateAtMs } from "./candidate-store";
 import { PassCandidates, syncRegionHints } from "./creator-candidates";
 import {
   keepsProbing,
@@ -25,7 +26,7 @@ import { nextHintWait, paceHint } from "./creator-hints";
 import { observeSlots } from "./creator-slots";
 import { observeSpares, settleSpares } from "./creator-spares";
 import {
-  beginCreation,
+  beginCreationWith,
   beginRelease,
   lastCopiedLaneSeq,
   readModes,
@@ -35,15 +36,17 @@ import {
   recordLaneChange,
   recordReleased,
   recordSpentName,
-  registerSlot,
+  registerSlotWith,
   stampVerified,
   type Slot,
   type SqlDatabase,
 } from "./creator-store";
 import {
   deleteGap,
+  gapDeleteStatements,
+  gapWriteStatements,
+  leaseHeldIn,
   readGaps,
-  writeGap,
   type GapKind,
   type GapRecord,
 } from "./gap-store";
@@ -55,7 +58,7 @@ import {
 import { LANE_HANDOFF_SETTLE_MS } from "./lane";
 import { passReading } from "./pass-clock";
 import { claimPass, LeaseLost, releasePass, renewPass } from "./pass-lease";
-import { registerSpare, stampSpareVerified } from "./spare-store";
+import { registerSpareWith, stampSpareVerified } from "./spare-store";
 import { readPrimary, type PrimaryPlacement } from "./primary-colo";
 
 // What the creator needs from one of the app's object classes.
@@ -597,6 +600,14 @@ async function runLeasedPass(
     if (!holds(cls.code, colo)) return "base";
     return primary?.colo === colo && sparesShort(cls) ? "spare" : null;
   };
+  // The gaps' records (gap-store.ts), read once, and kept as the pass writes
+  // and deletes them.
+  const gapKey = (classCode: number, colo: Colo): string =>
+    `${classCode}:${colo}`;
+  const gapRecords = new Map<string, GapRecord>();
+  for (const record of await readGaps(db)) {
+    gapRecords.set(gapKey(record.classCode, record.colo), record);
+  }
   const keep = async (
     cls: CreatorClass,
     name: string,
@@ -618,11 +629,33 @@ async function runLeasedPass(
       registeredAtMs: atMs,
       verifiedAtMs: null,
     };
+    // The record this object ends, which goes in the batch that registers
+    // it, so a pass that stops after the registration leaves none standing.
+    // A base slot ends any record in its colo: the class had no slot there,
+    // so a record of its spares there is of a gap that changed kind when the
+    // slot was lost, and a record of the missing slot is of the gap it
+    // fills. A spare ends the record of the shortfall once it is the last
+    // spare the class keeps.
+    const filled = gapRecords.get(gapKey(cls.code, colo));
+    const retired =
+      filled !== undefined &&
+      (role === "base" ||
+        (filled.kind === "spares" &&
+          (occupied.get(cls.code) ?? 0) + 1 >= cls.spares))
+        ? filled
+        : undefined;
+    let alongside: readonly unknown[];
     try {
-      await (role === "base" ? registerSlot : registerSpare)(db, slot, {
-        opId,
-        kind: "created",
-      });
+      alongside = await (
+        role === "base" ? registerSlotWith : registerSpareWith
+      )(
+        db,
+        slot,
+        { opId, kind: "created" },
+        retired === undefined
+          ? []
+          : gapDeleteStatements(db, retired, fence.holder),
+      );
     } catch (error) {
       // Placed but not registered: a marked object outside the registry would
       // never cease and never be released, so it is emptied, unless the keep
@@ -638,6 +671,13 @@ async function runLeasedPass(
       }
       throw error;
     }
+    if (retired !== undefined) {
+      if (!leaseHeldIn(alongside)) throw new LeaseLost();
+      gapRecords.delete(gapKey(cls.code, colo));
+      log(
+        `[follow] ${cls.label} gap in ${colo} closed - its record is deleted`,
+      );
+    }
     if (role === "spare") {
       // Counted once registered, before its stamp: a stamp that fails must not
       // leave the class short in this pass's count, or the next creation would
@@ -650,9 +690,15 @@ async function runLeasedPass(
       log(`[follow] ${cls.label} spare ${name} created in ${colo}`);
       return;
     }
-    const stamped = await stampVerified(db, { name, colo, opId, atMs });
-    registry.set(name, { ...slot, verifiedAtMs: stamped ? atMs : null });
+    // Held once registered, before its stamp, as a spare is counted: a stamp
+    // that fails must not leave the pass taking the colo for a gap, or a
+    // later creation this pass would record that gap again and place a
+    // second base slot there.
+    registry.set(name, slot);
     held.set(cls.code, (held.get(cls.code) ?? new Set<Colo>()).add(colo));
+    if (await stampVerified(db, { name, colo, opId, atMs })) {
+      registry.set(name, { ...slot, verifiedAtMs: atMs });
+    }
     report.created.push({ classCode: cls.code, name, colo });
     log(`[follow] ${cls.label} slot ${name} created in ${colo}`);
   };
@@ -755,17 +801,15 @@ async function runLeasedPass(
     capMs: config.maxBackoffMs,
     passIntervalMs: config.passIntervalMs,
   };
-  const gapKey = (classCode: number, colo: Colo): string =>
-    `${classCode}:${colo}`;
-  const gapRecords = new Map<string, GapRecord>();
-  for (const record of await readGaps(db)) {
-    gapRecords.set(gapKey(record.classCode, record.colo), record);
-  }
   const waits = new Map(
     (await readHintWaits(db)).map((wait) => [wait.regionHint, wait]),
   );
+  const learnedAtMs = await readNewestCandidateAtMs(db);
   const hintPacing = new Map(
-    regionHints.map((hint) => [hint, paceHint(waits.get(hint), clock)]),
+    regionHints.map((hint) => [
+      hint,
+      paceHint(waits.get(hint), clock, learnedAtMs),
+    ]),
   );
   for (const [hint, pacing] of hintPacing) {
     if (pacing.dueAtMs !== null) {
@@ -882,56 +926,50 @@ async function runLeasedPass(
       );
       continue;
     }
-    // A probe is a creation for every gap the class has, so before each one
-    // the pass begins the record of each gap that has none of its kind, or
-    // one it cannot trust, as an attempt's record comes before the attempt.
-    // Such a record has no attempt, so the attempts start it over on the
-    // first pass that can make one (creator-gaps.ts). A refused write means
-    // the lease is gone, and the pass stops before the probe.
-    const recordProbe = async (): Promise<void> => {
+    // A probe is a creation for every gap the class has, so it begins the
+    // record of each gap that has none of its kind, or one the pass cannot
+    // trust. Such a record has no attempt, so the attempts start it over on
+    // the first pass that can make one (creator-gaps.ts).
+    const probeRecords = (): GapRecord[] => {
+      const records: GapRecord[] = [];
       for (const colo of candidates.judged(primary)) {
         const kind = gapIn(colo);
         if (kind === null) continue;
-        const key = gapKey(cls.code, colo);
-        const held = gapRecords.get(key);
+        const held = gapRecords.get(gapKey(cls.code, colo));
         if (held?.kind === kind && !untrustedGap(held, passStartMs)) continue;
-        const record: GapRecord = {
-          classCode: cls.code,
-          colo,
-          kind,
-          begunAtMs: passStartMs,
-          attemptedAtMs: null,
-        };
-        if (!(await writeGap(db, record, fence.holder))) throw new LeaseLost();
         if (held?.kind === kind) {
           log(
             `[follow] ${cls.label} gap record in ${colo} cannot be trusted - replaced`,
           );
         }
-        gapRecords.set(key, record);
+        records.push({
+          classCode: cls.code,
+          colo,
+          kind,
+          begunAtMs: passStartMs,
+          attemptedAtMs: null,
+        });
       }
+      return records;
     };
-    // Each attempt at the gap in the primary's colo is recorded before it is
-    // made, under the lease, as a creation's intent comes before it: the
-    // pass's first attempt at each kind of gap writes the record, so a pass
-    // that stops partway has recorded what it attempted, and a kind no
-    // creation was made for gets no record. A gap whose kind changed under
-    // this pass's attempts began with them. A refused write means the lease
-    // is gone, and the pass stops before the attempt.
+    // The pass's first attempt at each kind of gap in the primary's colo
+    // records it, so a pass that stops partway has recorded what it
+    // attempted, and a kind no creation was made for gets no record. A gap
+    // whose kind changed under this pass's attempts began with them.
     const recorded = new Set<GapKind>();
-    const recordAttempt = async (paced: Paced): Promise<void> => {
+    const attemptRecords = (paced: Paced): GapRecord[] => {
       const kind = gapIn(paced.colo);
-      if (kind === null || recorded.has(kind)) return;
+      if (kind === null || recorded.has(kind)) return [];
       recorded.add(kind);
-      const record: GapRecord = {
-        classCode: cls.code,
-        colo: paced.colo,
-        kind,
-        begunAtMs: paced.kind === kind ? paced.pacing.begunAtMs : passStartMs,
-        attemptedAtMs: passStartMs,
-      };
-      if (!(await writeGap(db, record, fence.holder))) throw new LeaseLost();
-      gapRecords.set(gapKey(cls.code, paced.colo), record);
+      return [
+        {
+          classCode: cls.code,
+          colo: paced.colo,
+          kind,
+          begunAtMs: paced.kind === kind ? paced.pacing.begunAtMs : passStartMs,
+          attemptedAtMs: passStartMs,
+        },
+      ];
     };
     // A gap's record goes once a pass sees the gap filled, of another kind,
     // or gone from the class: a colo that is no candidate and no longer the
@@ -959,6 +997,7 @@ async function runLeasedPass(
         if (!(await deleteGap(db, record, fence.holder))) {
           throw new LeaseLost();
         }
+        gapRecords.delete(gapKey(cls.code, record.colo));
         log(
           dropped
             ? `[follow] ${cls.label} gap record in ${record.colo} cannot be trusted - deleted`
@@ -977,22 +1016,35 @@ async function runLeasedPass(
     }
     // Makes one creation through `regionHint`, and resolves the colo it
     // answered from, or null when it answered with none, its answer was lost
-    // or its outcome was not recorded. `dispatched` runs as the creation's
-    // call is made.
+    // or its outcome was not recorded. `records` gives the records of the
+    // gaps the creation is for, which commit in the batch that writes its
+    // intent, both before its call, so neither stands without the other. A
+    // refused record write means the lease is gone, and the pass stops before
+    // the call; `dispatched` runs as the call is made.
     const attempt = async (
       regionHint: string,
+      records: () => GapRecord[],
       dispatched?: () => void,
     ): Promise<Colo | null> => {
       await hold();
       const opId = deps.newOpId();
-      const { name } = await beginCreation(db, {
-        classCode: cls.code,
-        opId,
-        atMs: deps.now(),
-        nameOf: (n) => cls.nameOf(n, regionHint),
-        objectIdOf: (name) => cls.objectIdOf(name),
-      });
-      let answer: Colo | null = null;
+      const writes = records();
+      const { name, alongside } = await beginCreationWith(
+        db,
+        {
+          classCode: cls.code,
+          opId,
+          atMs: deps.now(),
+          nameOf: (n) => cls.nameOf(n, regionHint),
+          objectIdOf: (name) => cls.objectIdOf(name),
+        },
+        gapWriteStatements(db, writes, fence.holder),
+      );
+      if (!leaseHeldIn(alongside)) throw new LeaseLost();
+      for (const record of writes) {
+        gapRecords.set(gapKey(record.classCode, record.colo), record);
+      }
+      let answer: Colo | null;
       try {
         dispatched?.();
         const { colo } = await call(() => cls.observe(name, regionHint));
@@ -1009,13 +1061,13 @@ async function runLeasedPass(
         if (error instanceof LeaseLost) throw error;
         // The intent stays open for a later pass to resolve by observing.
         fail(`create ${name}: ${message(error)}`);
+        return null;
       }
       return answer;
     };
     for (const regionHint of regionHints) {
       if (!inRound(regionHint) && !youngGap()) continue;
-      await recordProbe();
-      const answer = await attempt(regionHint, () => {
+      const answer = await attempt(regionHint, probeRecords, () => {
         reportProbed(regionHint);
       });
       if (answer !== null) usable.add(regionHint);
@@ -1024,8 +1076,7 @@ async function runLeasedPass(
     if (paced !== null && paced.pacing.due && primaryHint !== null) {
       const attempts = budget.get(cls.code) ?? 0;
       for (let i = 0; i < attempts && primaryGap(); i++) {
-        await recordAttempt(paced);
-        await attempt(primaryHint);
+        await attempt(primaryHint, () => attemptRecords(paced));
       }
     } else {
       const note = waitNote();
@@ -1062,6 +1113,17 @@ async function runLeasedPass(
       }
       log(`[follow] region hint ${hint}'s wait cannot be trusted - deleted`);
     }
+  }
+  // A wait of a hint the creator no longer holds, such as an app hint its
+  // configuration has since changed, would stand untouched until the hint
+  // came back, and then hold back that hint's first round. Any pass in which
+  // a class acts deletes it.
+  for (const hint of anyActs && !candidates.addedAny ? waits.keys() : []) {
+    if (hintPacing.has(hint)) continue;
+    if (!(await deleteHintWait(db, hint, fence.holder))) throw new LeaseLost();
+    log(
+      `[follow] region hint ${hint}'s wait deleted - the creator no longer probes through it`,
+    );
   }
 
   // Release what has been out of the registry long enough and holds no lane.
