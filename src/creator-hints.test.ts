@@ -13,6 +13,7 @@ import {
   CreatorWorld,
   DEN,
   HOUR_MS,
+  IAD,
   MIA,
   ORD,
   SCHEDULER,
@@ -240,10 +241,41 @@ describe("rounds", () => {
     );
     expect(await waits()).toEqual([wait("enam", 2, 2)]);
 
-    await at(1, [cls, dry]);
+    const waiting = await at(1, [cls, dry]);
     expect(world.lines).toContain(
       "[follow] worker dry-run - would probe through no hint",
     );
+    expect(waiting.wouldCreate).toEqual([]);
+  });
+
+  // The risk this guards: a probe whose outcome was never recorded, its
+  // intent left open, taken for a round's usable answer, which would slow the
+  // probes on an answer the pass did not keep.
+  test("counts a probe whose outcome was not recorded for nothing", async () => {
+    world.candidate(IAD, T0_MS - 48 * HOUR_MS);
+    const unplaced: ScriptedClass = {
+      ...scriptedClass([IAD]),
+      place: () => Promise.reject(new Error("refused")),
+    };
+    unplaced.where.set("scheduler-ord", ORD);
+    const report = await at(0, [unplaced]);
+    expect(report.regionHintsProbed).toEqual(["enam"]);
+    expect(report.failures).toEqual(["create scheduler-test-enam-1: refused"]);
+    expect(await waits()).toEqual([]);
+  });
+
+  // The cap is a number of milliseconds, and the table holds whole ones, so
+  // a cap with a fraction still writes a wait the schema takes.
+  test("writes a whole-millisecond wait under a fractional cap", async () => {
+    world.clock = T0_MS;
+    const report = await world.pass(cls, {
+      maxBackoffMs: 6_300_000.5,
+      laneCodes: [],
+    });
+    expect(report.failures).toEqual([]);
+    expect(await waits()).toEqual([
+      { regionHint: "enam", waitMs: 6_300_000, dueAtMs: T0_MS + 6_300_000 },
+    ]);
   });
 
   // With every class in dry-run nothing is probed, so nothing moves the
@@ -264,6 +296,34 @@ describe("rounds", () => {
       "[follow] scheduler dry-run - would probe through enam",
     );
     expect(await waits()).toEqual([wait("enam", 48, 0)]);
+  });
+
+  // Dry-run writes none of the pacing's state. Adding a colo ends every
+  // hint's wait, so a pass in which no class acts adds none, even for a slot
+  // an operator registered in a new colo: it reports a failure instead, and
+  // the first pass in which a class acts adds the colo and ends the waits.
+  test("adds no colo and ends no wait in a pass where every class is in dry-run", async () => {
+    seedWait(wait("enam", 4, 3));
+    await world.seed("scheduler-den", DEN, T0_MS);
+    cls.where.set("scheduler-den", DEN);
+    await setMode(world.handle(), {
+      kind: "class",
+      code: SCHEDULER,
+      mode: "dry_run",
+      opId: "dry",
+      atMs: T0_MS,
+    });
+    const dry = await at(0);
+    expect(dry.failures).toEqual([
+      "dry-run - candidate colo DEN, where a slot is registered, not added: adding it would end every hint's wait, so a pass in which a class acts adds it",
+    ]);
+    expect(await readCandidateColos(world.handle())).toEqual([ORD]);
+    expect(await waits()).toEqual([wait("enam", 4, 3)]);
+
+    await world.act();
+    await at(1);
+    expect(await readCandidateColos(world.handle())).toEqual([ORD, DEN]);
+    expect(await waits()).toEqual([]);
   });
 
   // A hint the primary's region has just named has no wait, so its first

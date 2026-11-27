@@ -30,20 +30,37 @@ export class PassCandidates {
 
   // The stored candidates, with every colo a slot is registered in: a slot is
   // an object that landed there, so its colo joins the first time a pass reads
-  // it, and stays a candidate after the slot leaves, its gap reported.
+  // it, and stays a candidate after the slot leaves, its gap reported. Adding
+  // one ends every hint's wait, which dry-run must not do, so a pass in which
+  // no class acts (`acts` false) adds none: it reports each it would add as a
+  // failure, through `fail`, and leaves it to the first pass in which a class
+  // acts.
   static async load(
     db: SqlDatabase,
     holder: string,
     registered: Iterable<Colo>,
-    atMs: number,
-    log: (line: string) => void,
+    pass: {
+      readonly atMs: number;
+      readonly acts: boolean;
+      readonly log: (line: string) => void;
+      readonly fail: (line: string) => void;
+    },
   ): Promise<PassCandidates> {
+    const { atMs, log } = pass;
     const candidates = new PassCandidates(
       db,
       holder,
       await readCandidateColos(db),
     );
     for (const colo of new Set(registered)) {
+      if (!pass.acts) {
+        if (!candidates.has(colo)) {
+          pass.fail(
+            `dry-run - candidate colo ${colo}, where a slot is registered, not added: adding it would end every hint's wait, so a pass in which a class acts adds it`,
+          );
+        }
+        continue;
+      }
       if (await candidates.add(colo, atMs)) {
         log(
           `[follow] candidate colo ${colo} added - a slot is registered there`,

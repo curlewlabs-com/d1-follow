@@ -178,6 +178,7 @@ describe("observing the spares", () => {
   // A spare that cannot answer is not yet known to be gone, as with a base
   // slot: it stays until its last answer is older than a slot may go.
   test("keeps a silent spare until its last answer is too old", async () => {
+    world.candidate(ORD, T0_MS - HOUR_MS);
     await spare("scheduler-spare", ORD, T0_MS - HOUR_MS);
     cls.silent.add("scheduler-spare");
     const kept = await world.pass(cls);

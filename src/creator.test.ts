@@ -461,6 +461,7 @@ describe("keeping", () => {
   // A slot answering from another colo is not where the router would send
   // work, so it leaves the registry at once and waits to be released.
   test("unregisters a slot that answers from another colo", async () => {
+    world.candidate(ORD, T0_MS - HOUR_MS);
     await world.seed("scheduler-serving", ORD, T0_MS - HOUR_MS);
     const cls = scriptedClass([]);
     cls.where.set("scheduler-serving", IAD);

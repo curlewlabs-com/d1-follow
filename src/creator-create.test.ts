@@ -91,9 +91,10 @@ describe("probing", () => {
   });
 
   // The registered slots' colos are where objects have landed already, so
-  // they are the set the creator starts from. One stays a candidate once its
-  // slot leaves, or its gap would go unreported.
+  // they are the set the creator starts from, once a class acts. One stays a
+  // candidate once its slot leaves, or its gap would go unreported.
   test("keeps a registered slot's colo a candidate after the slot leaves", async () => {
+    await world.act();
     await world.seed("scheduler-ord", ORD, T0_MS - HOUR_MS);
     const cls = scriptedClass([]);
     cls.where.set("scheduler-ord", IAD);

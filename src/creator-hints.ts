@@ -57,6 +57,9 @@ export function nextHintWait(
   at: PassClock,
 ): HintWait | null {
   if (pacesNothing(at)) return null;
-  const waitMs = Math.min(2 * (pacing.waitMs ?? at.passIntervalMs), at.capMs);
+  // Whole milliseconds, as the table holds them, whatever the cap.
+  const waitMs = Math.floor(
+    Math.min(2 * (pacing.waitMs ?? at.passIntervalMs), at.capMs),
+  );
   return { regionHint, waitMs, dueAtMs: at.passStartMs + waitMs };
 }

@@ -7,9 +7,11 @@
 // changes into the ledger, and reports the gaps.
 //
 // The app supplies each class's calls and names and the databases; this owns
-// the decisions and their records. Observing and recording run in either mode.
-// Creating and releasing objects run only in act mode, and dry-run logs what
-// they would do.
+// the decisions and their records. Observing and recording run in either mode,
+// except the pacing's state: a pass with every class in dry-run adds no
+// candidate colo, since the add ends every hint's wait, and reports it as a
+// failure. Creating and releasing objects run only in act mode, and dry-run
+// logs what they would do.
 import { readLaneChangesAfter, readLaneHolders } from "./app-lane-reads";
 import type { Colo } from "./colo";
 import { PassCandidates, syncRegionHints } from "./creator-candidates";
@@ -219,7 +221,9 @@ export interface CreatorPassReport {
   readonly spent: readonly ReportedObject[];
   readonly released: readonly ReportedObject[];
   readonly laneChangesCopied: number;
-  // What dry-run would have done.
+  // What dry-run would have done: each class in dry-run that would have made
+  // a creation this pass, a probe or an attempt, and each name it would have
+  // resolved or released.
   readonly wouldCreate: readonly number[];
   readonly wouldRelease: readonly string[];
   // Calls that failed; each leaves its record to a later pass.
@@ -502,8 +506,12 @@ async function runLeasedPass(
     db,
     fence.holder,
     [...registry.values()].map((s) => s.colo),
-    passStartMs,
-    log,
+    {
+      atMs: passStartMs,
+      acts: config.classes.some((c) => modes.modeOf("class", c.code) === "act"),
+      log,
+      fail,
+    },
   );
   const learn = async (colo: Colo | null): Promise<void> => {
     if (colo !== null && (await candidates.add(colo, deps.now()))) {
@@ -850,11 +858,15 @@ async function runLeasedPass(
         return restarts || keepsProbing(record, clock);
       });
     if (modes.modeOf("class", cls.code) !== "act") {
-      report.wouldCreate.push(cls.code);
       const young = youngGap();
       const hints = regionHints.filter((hint) => young || inRound(hint));
       const paced = paceNow();
-      const due = paced !== null && paced.pacing.due && primaryHint !== null;
+      const due =
+        paced !== null &&
+        paced.pacing.due &&
+        primaryHint !== null &&
+        (budget.get(cls.code) ?? 0) > 0;
+      if (hints.length > 0 || due) report.wouldCreate.push(cls.code);
       const note = waitNote();
       log(
         `[follow] ${cls.label} dry-run - would probe through ${hints.length > 0 ? hints.join(",") : "no hint"}${due ? ` and attempt the gap in ${paced.colo}` : ""}${note === null ? "" : `; ${note}`}`,
@@ -956,8 +968,8 @@ async function runLeasedPass(
     }
     // Makes one creation through `regionHint`, and resolves the colo it
     // answered from and whether that colo was already a candidate, or null
-    // when its answer was lost. `dispatched` runs as the creation's call is
-    // made.
+    // when its answer was lost or its outcome was not recorded. `dispatched`
+    // runs as the creation's call is made.
     const attempt = async (
       regionHint: string,
       dispatched?: () => void,
@@ -975,13 +987,16 @@ async function runLeasedPass(
       try {
         dispatched?.();
         const { colo } = await call(() => cls.observe(name, regionHint));
-        answer = { colo, known: colo !== null && candidates.has(colo) };
+        const known = colo !== null && candidates.has(colo);
         const role = roleOf(cls, colo);
         if (colo !== null && role !== null) {
           await keep(cls, name, colo, opId, role);
         } else {
           await spend(cls, name, colo, opId);
         }
+        // Only once its outcome is recorded: a creation whose intent stays
+        // open counts for nothing in its round, whatever it answered.
+        answer = { colo, known };
       } catch (error) {
         if (error instanceof LeaseLost) throw error;
         // The intent stays open for a later pass to resolve by observing.
