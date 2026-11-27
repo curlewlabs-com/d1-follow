@@ -1,7 +1,6 @@
 // The creator database's statements (schema/creator.sql), several
 // responsibilities held together: the registry of base slots, the name counter,
-// the modes, the ledger with the intents and releases it opens, and
-// follow_backoff, which only builds older than the gap records read.
+// the modes, the ledger with the intents and releases it opens, and the backoff.
 //
 // They run against any handle with D1's prepare/bind/all/run/batch shape. D1
 // satisfies it, and the tests run the same statements against SQLite. Rows
@@ -271,33 +270,14 @@ export function ledgerStatement(
 // unresolved attempt, not as one nothing accounts for.
 export async function beginCreation(
   db: SqlDatabase,
-  attempt: CreationAttempt,
+  attempt: {
+    readonly classCode: number;
+    readonly opId: string;
+    readonly atMs: number;
+    readonly nameOf: (number: number) => string;
+    readonly objectIdOf: (name: string) => string;
+  },
 ): Promise<{ readonly number: number; readonly name: string }> {
-  const { number, name } = await beginCreationWith(db, attempt, []);
-  return { number, name };
-}
-
-export interface CreationAttempt {
-  readonly classCode: number;
-  readonly opId: string;
-  readonly atMs: number;
-  readonly nameOf: (number: number) => string;
-  readonly objectIdOf: (name: string) => string;
-}
-
-// beginCreation, with `alongside` committed in the intent's own batch, such
-// as the records of the gaps the creation is for (gap-store.ts), and their
-// results returned in order. The creator's pass uses it; the package exports
-// beginCreation alone.
-export async function beginCreationWith(
-  db: SqlDatabase,
-  attempt: CreationAttempt,
-  alongside: readonly SqlStatement[],
-): Promise<{
-  readonly number: number;
-  readonly name: string;
-  readonly alongside: readonly unknown[];
-}> {
   const { results } = await db
     .prepare(CREATOR_SQL.takeNameNumber)
     .bind(attempt.classCode)
@@ -312,7 +292,7 @@ export async function beginCreationWith(
   const name = attempt.nameOf(number);
   // The open-intent row goes with the intent, so an attempt whose answer is
   // lost is found by a later pass without reading the ledger.
-  const committed = await db.batch([
+  await db.batch([
     ledgerStatement(db, {
       opId: attempt.opId,
       atMs: attempt.atMs,
@@ -324,9 +304,8 @@ export async function beginCreationWith(
     db
       .prepare(CREATOR_SQL.openIntent)
       .bind(attempt.opId, attempt.classCode, name, attempt.atMs),
-    ...alongside,
   ]);
-  return { number, name, alongside: committed.slice(2) };
+  return { number, name };
 }
 
 // Records a creation attempt's name as spent: the object landed where the
@@ -363,27 +342,9 @@ export async function recordSpentName(
 export async function registerSlot(
   db: SqlDatabase,
   slot: Slot,
-  record: RegistrationRecord,
+  record: { readonly opId: string; readonly kind: "created" | "seeded" },
 ): Promise<void> {
-  await registerSlotWith(db, slot, record, []);
-}
-
-export interface RegistrationRecord {
-  readonly opId: string;
-  readonly kind: "created" | "seeded";
-}
-
-// registerSlot, with `alongside` committed in the registration's own batch,
-// such as the delete of the gap record the slot fills (gap-store.ts), and
-// their results returned in order. The creator's pass uses it; the package
-// exports registerSlot alone.
-export async function registerSlotWith(
-  db: SqlDatabase,
-  slot: Slot,
-  record: RegistrationRecord,
-  alongside: readonly SqlStatement[],
-): Promise<readonly unknown[]> {
-  const statements = [
+  await db.batch([
     holdIdentity(db, slot),
     db
       .prepare(CREATOR_SQL.insertSlot)
@@ -409,9 +370,7 @@ export async function registerSlotWith(
     ...(record.kind === "created"
       ? [db.prepare(CREATOR_SQL.closeIntent).bind(record.opId)]
       : []),
-  ];
-  const results = await db.batch([...statements, ...alongside]);
-  return results.slice(statements.length);
+  ]);
 }
 
 // Stamps a slot's latest answer from `colo`, its own, and true when the slot
@@ -810,10 +769,7 @@ export async function recordReleased(
   ]);
 }
 
-// A class's wait before attempting a gap in the primary's colo again, as builds
-// before the gap records (gap-store.ts) kept it in follow_backoff. No pass
-// reads or writes it now; these stay exported so an app that reads the table
-// keeps working.
+// A class's creation backoff. A class with none attempts on every pass.
 export interface Backoff {
   readonly waitMs: number;
   readonly nextAttemptAtMs: number;

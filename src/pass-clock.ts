@@ -1,7 +1,6 @@
 // How a creator pass reads its pacing thresholds (README sec."Pacing the
-// probes" and sec."Pacing the attempts"): the clock a pass's pacing decisions
-// read, and when a threshold ends for a pass. The gaps' pacing
-// (creator-gaps.ts) and the hints' (creator-hints.ts) both read it.
+// probes"): the clock a pass's pacing decisions read, and when a threshold
+// ends for a pass. The hints' pacing (creator-hints.ts) reads it.
 
 // The pass's start, the cap on its pacing (CreatorConfig.maxBackoffMs), and
 // the time between passes.
