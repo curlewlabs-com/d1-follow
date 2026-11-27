@@ -238,11 +238,12 @@ describe("region hints", () => {
 
 describe("attempts", () => {
   // A placed object the registry refuses (here, because another slot took
-  // the colo first) would hold its marker forever outside every record, so it
-  // is emptied, and its attempt stays open for a later pass.
-  test("empties a placed object the registry refuses", async () => {
+  // the colo first) keeps its marker this pass, since a failed batch can
+  // also be one that committed with its reply lost. Its attempt stays open,
+  // and the next pass, finding it unregistered, empties and spends it.
+  test("empties a placed object the registry refuses on the next pass", async () => {
     await world.act();
-    const cls = scriptedClass([ORD]);
+    const cls = scriptedClass([ORD, ORD]);
     const racing: CreatorClass = {
       ...cls,
       place: async (name, colo, deadlineMs) => {
@@ -252,13 +253,55 @@ describe("attempts", () => {
     };
     const report = await world.pass(racing, { attemptsPerClassPerPass: 1 });
     expect(report.created).toEqual([]);
-    expect(cls.releasedNames).toEqual(["scheduler-test-enam-1"]);
+    expect(cls.releasedNames).toEqual([]);
+    expect(cls.marked.get("scheduler-test-enam-1")).toBe(ORD);
     expect(report.failures).toHaveLength(1);
     expect(
       (await readOpenIntents(world.handle(), world.clock + 1)).map(
         (i) => i.name,
       ),
     ).toEqual(["scheduler-test-enam-1"]);
+
+    world.clock += HOUR_MS;
+    cls.where.set("scheduler-racer", ORD);
+    const next = await world.pass(cls, { attemptsPerClassPerPass: 1 });
+    expect(cls.releasedNames).toEqual(["scheduler-test-enam-1"]);
+    expect(next.spent.map((o) => o.name)).toContain("scheduler-test-enam-1");
+    expect(await readOpenIntents(world.handle(), world.clock + 1)).toEqual([]);
+  });
+
+  // The failure this guards: a registration batch that commits and loses its
+  // reply. Emptying the object then would leave a registered slot with no
+  // marker, so the object is left as placed, and the next pass verifies it.
+  test("keeps a slot whose registration committed and lost its reply", async () => {
+    await world.act();
+    const cls = scriptedClass([ORD]);
+    let loseReply = false;
+    world.afterBatch = () => {
+      if (!loseReply) return;
+      loseReply = false;
+      throw new Error("reply lost");
+    };
+    const losing: CreatorClass = {
+      ...cls,
+      place: async (name, colo, deadlineMs) => {
+        await cls.place(name, colo, deadlineMs);
+        loseReply = true;
+      },
+    };
+    const report = await world.pass(losing, { attemptsPerClassPerPass: 1 });
+    expect(report.created).toEqual([]);
+    expect(report.failures).toEqual([
+      "create scheduler-test-enam-1: reply lost",
+    ]);
+    expect(cls.releasedNames).toEqual([]);
+    expect(await readOpenIntents(world.handle(), world.clock + 1)).toEqual([]);
+
+    world.clock += HOUR_MS;
+    const next = await world.pass(cls, { attemptsPerClassPerPass: 1 });
+    expect(next.verified).toContain("scheduler-test-enam-1");
+    expect(cls.marked.get("scheduler-test-enam-1")).toBe(ORD);
+    expect(cls.releasedNames).toEqual([]);
   });
 
   // An attempt resolved later may have been placed before its answer was
@@ -289,13 +332,14 @@ describe("attempts", () => {
     expect(cls.releasedNames).toEqual(["scheduler-test-enam-1"]);
   });
 
-  // Both cleanups empty an object the creator minted and never registered,
-  // and an app may still protect such a name. The keep list that guards the
-  // release step guards them too: a protected name is never emptied, and its
-  // attempt stays open rather than being recorded as spent.
-  test("empties no protected name when the registry refuses it", async () => {
+  // Resolving an attempt empties an object the creator minted and never
+  // registered, and an app may still protect such a name. The keep list that
+  // guards the release step guards it too: a protected name the registry
+  // refused is never emptied, and its attempt stays open rather than being
+  // recorded as spent.
+  test("empties no protected name the registry refused", async () => {
     await world.act();
-    const cls = scriptedClass([ORD]);
+    const cls = scriptedClass([ORD, ORD]);
     const racing: CreatorClass = {
       ...cls,
       place: async (name, colo, deadlineMs) => {
@@ -303,17 +347,22 @@ describe("attempts", () => {
         await world.seed("scheduler-racer", colo, T0_MS);
       },
     };
+    const protectedNames = new Set(["scheduler-test-enam-1"]);
     const report = await world.pass(racing, {
       attemptsPerClassPerPass: 1,
-      protectedNames: new Set(["scheduler-test-enam-1"]),
+      protectedNames,
     });
+    expect(report.created).toEqual([]);
+
+    world.clock += HOUR_MS;
+    cls.where.set("scheduler-racer", ORD);
+    await world.pass(cls, { attemptsPerClassPerPass: 1, protectedNames });
     expect(cls.releasedNames).toEqual([]);
     expect(
       (await readOpenIntents(world.handle(), world.clock + 1)).map(
         (i) => i.name,
       ),
     ).toEqual(["scheduler-test-enam-1"]);
-    expect(report.created).toEqual([]);
   });
 
   test("leaves a resolved attempt open when its name holds a lane", async () => {

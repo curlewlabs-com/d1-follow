@@ -657,17 +657,19 @@ async function runLeasedPass(
           : gapDeleteStatements(db, retired, fence.holder),
       );
     } catch (error) {
-      // Placed but not registered: a marked object outside the registry would
-      // never cease and never be released, so it is emptied, unless the keep
-      // list names it. Its intent stays open for a later pass either way.
-      if (await mayEmpty(name)) {
-        await call(() =>
-          cls.release(name, deadline()).catch((releaseError: unknown) => {
-            log(
-              `[follow] failed - empty unregistered ${name}: ${message(releaseError)}`,
-            );
-          }),
-        );
+      // A batch that fails may have committed with its reply lost, or may
+      // still land after a read of the row finds none, so no read now can
+      // show it was refused. The object keeps its marker, and this pass
+      // counts it as registered, so that no later creation this pass places a
+      // second slot in its colo or a spare past the count. The next pass
+      // reads the registry again: a registration that landed closed the
+      // intent and is verified like any new slot, and one that did not left
+      // the intent open, and resolving it keeps or empties the object.
+      if (role === "spare") {
+        occupied.set(cls.code, (occupied.get(cls.code) ?? 0) + 1);
+      } else {
+        registry.set(name, slot);
+        held.set(cls.code, (held.get(cls.code) ?? new Set<Colo>()).add(colo));
       }
       throw error;
     }
