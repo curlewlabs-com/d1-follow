@@ -213,6 +213,21 @@ describe("rounds", () => {
     expect(await waits()).toEqual([wait("enam", 2, 2)]);
   });
 
+  // The risk this guards: a colo learned partway through a pass opening the
+  // waiting hints for the classes after it but not those before, so classes
+  // are paced unalike in one pass. Which hints are in their round is read
+  // once; the learned colo still deletes every wait for the next pass.
+  test("keeps the pass's rounds as they began when a class learns a colo", async () => {
+    seedHint("weur");
+    seedWait(wait("weur", 4, 3));
+    const other = await worker([DEN]);
+    const report = await at(0, [cls, other]);
+    expect(report.learnedColos).toEqual([DEN]);
+    expect(report.regionHintsProbed).toEqual(["enam"]);
+    expect(report.failures).toEqual([]);
+    expect(await waits()).toEqual([]);
+  });
+
   // Dry-run makes no probe and writes no wait; it says what it would probe
   // through. The class beside it that acts makes the round.
   test("lets a class in dry-run beside one that acts leave the round to it", async () => {

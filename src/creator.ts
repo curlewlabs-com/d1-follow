@@ -760,10 +760,11 @@ async function runLeasedPass(
       );
     }
   }
-  // A pass that has added a colo has deleted every hint's wait, so from then
-  // on every hint is in its round.
+  // Which hints are in their round is read once, as the probes begin, so
+  // every class this pass is paced alike. A colo learned during the pass
+  // deletes every wait, so the next pass's rounds open for all of them.
   const inRound = (hint: string): boolean =>
-    candidates.addedAny || (hintPacing.get(hint)?.round ?? true);
+    hintPacing.get(hint)?.round ?? true;
   // What the probes taught, by hint: each hint a class that acts probed
   // through, each one a probe through it answered with a colo, and each one a
   // probe answered from a colo that was no candidate. A probe left open, or
@@ -832,13 +833,21 @@ async function runLeasedPass(
     };
     // Whether the class has a gap that keeps it probing through every hint
     // whatever their waits: one no pass has created for, one whose record is
-    // of another kind or cannot be trusted, or a young one.
+    // of another kind or cannot be trusted, a young one, or one in the
+    // primary's colo whose record this pass's attempts will start over, since
+    // it is young again from the first pass that can attempt it.
     const youngGap = (): boolean =>
       candidates.judged(primary).some((colo) => {
         const kind = gapIn(colo);
         if (kind === null) return false;
-        const record = gapRecords.get(gapKey(cls.code, colo));
-        return keepsProbing(record?.kind === kind ? record : undefined, clock);
+        const held = gapRecords.get(gapKey(cls.code, colo));
+        const record = held?.kind === kind ? held : undefined;
+        const restarts =
+          record?.attemptedAtMs === null &&
+          colo === primary?.colo &&
+          primaryHint !== null &&
+          (budget.get(cls.code) ?? 0) > 0;
+        return restarts || keepsProbing(record, clock);
       });
     if (modes.modeOf("class", cls.code) !== "act") {
       report.wouldCreate.push(cls.code);

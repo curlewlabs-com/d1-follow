@@ -384,8 +384,17 @@ describe("the gap's record", () => {
     expect(attempted(await at(0))).toBe(0);
     expect(await gaps()).toEqual([gap(MIA, -48, null)]);
 
+    // The gap is young again from this pass, for its probes as for its
+    // attempts, so the class probes through a hint that is waiting.
+    world.creator
+      .query(
+        "INSERT OR REPLACE INTO follow_hint_wait (region_hint, wait_ms, due_at_ms) VALUES ('enam', ?, ?)",
+      )
+      .run(4 * HOUR_MS, T0_MS + 4 * HOUR_MS);
     world.primary = { colo: MIA, region: "ENAM" };
-    expect(attempted(await at(1))).toBe(ATTEMPTS);
+    const restarted = await at(1);
+    expect(restarted.regionHintsProbed).toEqual(["enam"]);
+    expect(attempted(restarted)).toBe(ATTEMPTS);
     expect(await gaps()).toEqual([gap(MIA, 1, 1)]);
     expect(attempted(await at(2))).toBe(ATTEMPTS);
   });

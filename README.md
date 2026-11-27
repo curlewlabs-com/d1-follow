@@ -446,8 +446,9 @@ young gap keeps probing on every pass.
 - **A new colo ends every wait.** Any creation that lands in a colo that was no
   candidate, a probe, an attempt or one a later pass resolves, deletes every
   hint's wait in the batch that adds the colo, and the pass that added it writes
-  no wait afterwards. A hint just added has no wait, so its first pass is a
-  round.
+  no wait afterwards; its own rounds stay as they began, so every class in it is
+  paced alike, and the next pass's rounds are open to all of them. A hint just
+  added has no wait, so its first pass is a round.
 - **A young gap keeps its class probing.** A probe is a creation for every gap
   its class has, so the pass that makes the first creation for a gap begins its
   record ([Pacing the attempts](#pacing-the-attempts)). While the gap is younger
