@@ -271,16 +271,28 @@ export function ledgerStatement(
 // unresolved attempt, not as one nothing accounts for.
 export async function beginCreation(
   db: SqlDatabase,
-  attempt: {
-    readonly classCode: number;
-    readonly opId: string;
-    readonly atMs: number;
-    readonly nameOf: (number: number) => string;
-    readonly objectIdOf: (name: string) => string;
-  },
-  // Statements committed in the intent's own batch, such as the records of
-  // the gaps the creation is for; their results are returned in order.
-  alongside: readonly SqlStatement[] = [],
+  attempt: CreationAttempt,
+): Promise<{ readonly number: number; readonly name: string }> {
+  const { number, name } = await beginCreationWith(db, attempt, []);
+  return { number, name };
+}
+
+export interface CreationAttempt {
+  readonly classCode: number;
+  readonly opId: string;
+  readonly atMs: number;
+  readonly nameOf: (number: number) => string;
+  readonly objectIdOf: (name: string) => string;
+}
+
+// beginCreation, with `alongside` committed in the intent's own batch, such
+// as the records of the gaps the creation is for (gap-store.ts), and their
+// results returned in order. The creator's pass uses it; the package exports
+// beginCreation alone.
+export async function beginCreationWith(
+  db: SqlDatabase,
+  attempt: CreationAttempt,
+  alongside: readonly SqlStatement[],
 ): Promise<{
   readonly number: number;
   readonly name: string;
@@ -351,10 +363,25 @@ export async function recordSpentName(
 export async function registerSlot(
   db: SqlDatabase,
   slot: Slot,
-  record: { readonly opId: string; readonly kind: "created" | "seeded" },
-  // Statements committed in the registration's own batch, such as the delete
-  // of the gap record it fills; their results are returned in order.
-  alongside: readonly SqlStatement[] = [],
+  record: RegistrationRecord,
+): Promise<void> {
+  await registerSlotWith(db, slot, record, []);
+}
+
+export interface RegistrationRecord {
+  readonly opId: string;
+  readonly kind: "created" | "seeded";
+}
+
+// registerSlot, with `alongside` committed in the registration's own batch,
+// such as the delete of the gap record the slot fills (gap-store.ts), and
+// their results returned in order. The creator's pass uses it; the package
+// exports registerSlot alone.
+export async function registerSlotWith(
+  db: SqlDatabase,
+  slot: Slot,
+  record: RegistrationRecord,
+  alongside: readonly SqlStatement[],
 ): Promise<readonly unknown[]> {
   const statements = [
     holdIdentity(db, slot),

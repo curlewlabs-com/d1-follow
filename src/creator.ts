@@ -26,7 +26,7 @@ import { nextHintWait, paceHint } from "./creator-hints";
 import { observeSlots } from "./creator-slots";
 import { observeSpares, settleSpares } from "./creator-spares";
 import {
-  beginCreation,
+  beginCreationWith,
   beginRelease,
   lastCopiedLaneSeq,
   readModes,
@@ -36,7 +36,7 @@ import {
   recordLaneChange,
   recordReleased,
   recordSpentName,
-  registerSlot,
+  registerSlotWith,
   stampVerified,
   type Slot,
   type SqlDatabase,
@@ -58,7 +58,7 @@ import {
 import { LANE_HANDOFF_SETTLE_MS } from "./lane";
 import { passReading } from "./pass-clock";
 import { claimPass, LeaseLost, releasePass, renewPass } from "./pass-lease";
-import { registerSpare, stampSpareVerified } from "./spare-store";
+import { registerSpareWith, stampSpareVerified } from "./spare-store";
 import { readPrimary, type PrimaryPlacement } from "./primary-colo";
 
 // What the creator needs from one of the app's object classes.
@@ -644,7 +644,9 @@ async function runLeasedPass(
         : undefined;
     let alongside: readonly unknown[];
     try {
-      alongside = await (role === "base" ? registerSlot : registerSpare)(
+      alongside = await (
+        role === "base" ? registerSlotWith : registerSpareWith
+      )(
         db,
         slot,
         { opId, kind: "created" },
@@ -1019,7 +1021,7 @@ async function runLeasedPass(
       await hold();
       const opId = deps.newOpId();
       const writes = records();
-      const { name, alongside } = await beginCreation(
+      const { name, alongside } = await beginCreationWith(
         db,
         {
           classCode: cls.code,

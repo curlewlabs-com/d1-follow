@@ -8,6 +8,7 @@ import {
   ledgerStatement,
   returnedRows,
   slotFromRow,
+  type RegistrationRecord,
   type Slot,
   type SqlDatabase,
   type SqlStatement,
@@ -60,10 +61,19 @@ export async function readSpares(db: SqlDatabase): Promise<Slot[]> {
 export async function registerSpare(
   db: SqlDatabase,
   spare: Slot,
-  record: { readonly opId: string; readonly kind: "created" | "seeded" },
-  // As registerSlot's: statements committed in the same batch, whose results
-  // are returned in order.
-  alongside: readonly SqlStatement[] = [],
+  record: RegistrationRecord,
+): Promise<void> {
+  await registerSpareWith(db, spare, record, []);
+}
+
+// registerSpare, with `alongside` committed in the same batch, as
+// registerSlotWith's. The creator's pass uses it; the package exports
+// registerSpare alone.
+export async function registerSpareWith(
+  db: SqlDatabase,
+  spare: Slot,
+  record: RegistrationRecord,
+  alongside: readonly SqlStatement[],
 ): Promise<readonly unknown[]> {
   const statements = [
     holdIdentity(db, spare),
