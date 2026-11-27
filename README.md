@@ -351,9 +351,10 @@ invocations that overlap never fill the same gap twice:
   of the class's attempts there, through the hint for the primary's region,
   until the colo holds its slot and its spares. A primary whose region names no
   hint gets none of these attempts: the probes are all that reach its colo.
-  Attempts per class per pass are bounded, and a class whose attempts there fill
-  nothing waits longer between attempting passes, so a colo the hint seldom
-  reaches costs a few attempts a day. The probes do not wait on that backoff.
+  Attempts per class per pass are bounded, and the gap's age paces them: a gap
+  is attempted on every pass while it is young, and once per cap after that
+  ([Pacing the attempts](#pacing-the-attempts)). The probes do not wait on that
+  pacing.
 - **Report gaps.** It reports each candidate colo with no verified slot of a
   class, and the primary's colo while it is no candidate.
 - **Release.** A slot is released only when it is out of the registry, is no
@@ -426,6 +427,55 @@ each class's numbers come from one counter.
 A primary's colo that no creation reaches stays a gap, reported each pass. The
 fallback is a launch point there, which takes an operator request entering
 Cloudflare in that colo.
+
+### Pacing the attempts
+
+The attempts at the gap in the primary's colo are paced by the gap's age, under
+one cap, `CreatorConfig.maxBackoffMs`. A gap is young for the cap from the pass
+that made the first attempt at it, and is attempted on every pass while it is
+young. After that it is attempted when the cap has passed since its last
+attempt. A fresh gap gets the full attempt rate while a move most needs it
+filled, and a colo the hint seldom reaches costs one round of attempts per cap
+once its first cap has passed. At an hourly pass and a one-day cap, a gap no
+attempt fills gets about 24 rounds in its first day and one a day after.
+
+- **The record.** The pass that makes a gap's first attempt records when it
+  began, and each pass that attempts it records that attempt, before making it,
+  as a creation's intent comes before the creation: a pass that stops partway
+  has recorded what it attempted, and fails toward fewer attempts, never more. A
+  gap's age is wall time from its first attempt, whether or not later passes can
+  create: a class in dry-run, or one with an attempt left open, makes no
+  attempt, and its gap ages all the same.
+- **Its end.** A pass deletes a gap's record when it sees the gap filled, or
+  sees that the class no longer has it: a colo that is neither a candidate nor
+  the primary's, or a shortfall of spares in a colo the primary has left. A gap
+  that returns is a new one, young again.
+- **Its kind.** A record keeps what the class lacks: its slot in the colo, or,
+  with its slot in the primary's colo, the spares it keeps there. A pass that
+  sees the gap change kind deletes the record, and the gap is a new one. So a
+  shortfall of spares that has waited past its first day does not hold back the
+  attempts once the slot beside the primary is lost too, and a probe that
+  restores the slot leaves the remaining shortfall a fresh gap. The pass reads
+  the gap after its probes, so a probe that changes it counts before any
+  attempt. A pass that cannot read where the primary is makes no attempts and
+  leaves every record as it is, since it cannot tell which colo the attempts are
+  for, or whether a shortfall of spares is still one.
+- **Thresholds, not timers.** Each threshold is read by a pass: it ends on the
+  first pass that begins at or after it, less half a pass, so a cron that fires
+  a little early is not taken for one that came too soon. The time between two
+  attempts at an old gap is a whole number of passes, and can run up to a pass
+  past the cap, and longer when passes are missed. A cap no longer than a pass
+  paces nothing.
+- **State the pass cannot trust.** A record with a time ahead of the pass, or an
+  attempt before it began, is dropped and the attempts run, so a clock that ran
+  backward or a hand edit never silences them.
+- **Fenced by the lease.** Each write of a record names the pass lease in its
+  own statement, so a pass that stalled and lost its lease cannot put back a
+  record the pass holding it deleted.
+- **Dry-run** writes no record, and logs whether the attempts are due.
+
+A pass creates no more than the bound allows whatever the pacing: per class, one
+probe through each region hint and the attempts bound.
 
 ### Spare slots in a table of their own
 
@@ -605,12 +655,12 @@ The tool's state is split by who reads it on a hot path:
 - **The creator's database: the registry, its spares, the ledger, the modes, and
   the creator's own working state** (the candidate colos, the region hints it
   added, the name counter, the open creation intents, the objects waiting for
-  release, each class's backoff, and the pass lease). An overdue accept can
-  trigger a standby lookup. A stateless object reads the registry and its mode
-  in the background, cached, at most once every ten minutes. A lane reads them
-  only when its run reaches the threshold. The creator and the audit read them
-  on their own schedules. The app binds the creator's database for those reads.
-  Its mutation receivers enforce the
+  release, the record of each gap the pass has attempted, and the pass lease).
+  An overdue accept can trigger a standby lookup. A stateless object reads the
+  registry and its mode in the background, cached, at most once every ten
+  minutes. A lane reads them only when its run reaches the threshold. The
+  creator and the audit read them on their own schedules. The app binds the
+  creator's database for those reads. Its mutation receivers enforce the
   [placement guard](#guard-placement-and-release).
 
 The creator copies each lane change from the change log into the ledger on its

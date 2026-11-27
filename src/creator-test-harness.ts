@@ -183,6 +183,8 @@ export class CreatorWorld {
   clock = T0_MS;
   ops = 0;
   primary: { colo: Colo; region: string } | null | "fails" = null;
+  // Every line the passes logged, in order.
+  readonly lines: string[] = [];
 
   private constructor(
     readonly creator: Database,
@@ -217,7 +219,7 @@ export class CreatorWorld {
       config: config(cls, overrides),
       now: () => this.clock,
       newOpId: () => `op-${++this.ops}`,
-      log: () => {},
+      log: (line) => this.lines.push(line),
     });
   }
 

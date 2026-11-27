@@ -1,6 +1,7 @@
 // The creator database's statements (schema/creator.sql), several
 // responsibilities held together: the registry of base slots, the name counter,
-// the modes, the ledger with the intents and releases it opens, and the backoff.
+// the modes, the ledger with the intents and releases it opens, and
+// follow_backoff, which only builds older than the gap records read.
 //
 // They run against any handle with D1's prepare/bind/all/run/batch shape. D1
 // satisfies it, and the tests run the same statements against SQLite. Rows
@@ -769,7 +770,10 @@ export async function recordReleased(
   ]);
 }
 
-// A class's creation backoff. A class with none attempts on every pass.
+// A class's wait before attempting a gap in the primary's colo again, as builds
+// before the gap records (gap-store.ts) kept it in follow_backoff. No pass
+// reads or writes it now; these stay exported so an app that reads the table
+// keeps working.
 export interface Backoff {
   readonly waitMs: number;
   readonly nextAttemptAtMs: number;
