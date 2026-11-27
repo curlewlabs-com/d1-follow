@@ -150,7 +150,7 @@ describe("releasing", () => {
     expect(cls.releasedNames).toEqual([]);
   });
 
-  test("in dry-run, only says it would release", async () => {
+  test("in observe mode, only says it would release", async () => {
     const cls = scriptedClass([]);
     await world.seed("scheduler-old", ORD, T0_MS - HOUR_MS);
     cls.where.set("scheduler-old", IAD);

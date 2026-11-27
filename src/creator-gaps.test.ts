@@ -153,26 +153,26 @@ describe("pacing", () => {
     );
   });
 
-  // Dry-run and an attempt left open each stop a class creating, but the
-  // gap's age is wall time from its first creation, so a class that comes
-  // back after the cap finds the gap old. Dry-run writes none of the records
+  // Observe mode and an attempt left open each stop a class creating, but the
+  // gap's age is wall time from its first creation, so a class that comes back
+  // after the cap finds the gap old. Observe mode writes none of the records
   // and logs what is due.
   test("lets a gap age while its class can create nothing", async () => {
     expect(attempted(await at(0))).toBe(ATTEMPTS);
-    const dryRun = async (hours: number): Promise<CreatorPassReport> => {
+    const observing = async (hours: number): Promise<CreatorPassReport> => {
       await setMode(world.handle(), {
         kind: "class",
         code: SCHEDULER,
-        mode: "dry_run",
+        mode: "observe",
         opId: `dry-${hours}`,
         atMs: T0_MS + hours * HOUR_MS,
       });
       return await at(hours);
     };
-    const dry = await dryRun(12);
-    expect(creations(dry)).toBe(0);
+    const observed = await observing(12);
+    expect(creations(observed)).toBe(0);
     expect(world.lines).toContain(
-      "[follow] scheduler dry-run - would probe through enam and attempt the gap in MIA",
+      "[follow] scheduler observe - would probe through enam and attempt the gap in MIA",
     );
     expect(await gaps()).toEqual([gap(MIA, 0, 0)]);
 
@@ -181,9 +181,9 @@ describe("pacing", () => {
     expect(attempted(await at(26))).toBe(0);
     expect(await gaps()).toEqual([gap(MIA, 0, 25)]);
 
-    await dryRun(27);
+    await observing(27);
     expect(world.lines).toContain(
-      `[follow] scheduler dry-run - would probe through enam; the gap in MIA is next attempted by a pass from ${new Date(T0_MS + 48.5 * HOUR_MS).toISOString()}`,
+      `[follow] scheduler observe - would probe through enam; the gap in MIA is next attempted by a pass from ${new Date(T0_MS + 48.5 * HOUR_MS).toISOString()}`,
     );
     expect(await gaps()).toEqual([gap(MIA, 0, 25)]);
   });
@@ -203,7 +203,7 @@ describe("pacing", () => {
     await setMode(world.handle(), {
       kind: "class",
       code: SCHEDULER,
-      mode: "dry_run",
+      mode: "observe",
       opId: "dry",
       atMs: T0_MS + 26 * HOUR_MS,
     });

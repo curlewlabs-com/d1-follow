@@ -27,9 +27,9 @@ beforeEach(async () => {
 });
 
 describe("probing", () => {
-  // Dry-run is the default: a class nobody set to act takes no number and
+  // Observe mode is the default: a class nobody set to act takes no number and
   // creates nothing, and says what it would have done.
-  test("in dry-run, only says it would probe", async () => {
+  test("in observe mode, only says it would probe", async () => {
     const cls = scriptedClass([ORD]);
     const report = await world.pass(cls);
     expect(report.wouldCreate).toEqual([SCHEDULER]);
@@ -93,7 +93,7 @@ describe("probing", () => {
   // The registered slots' colos are where objects have landed already, so
   // they are the set the creator starts from, in either mode. One stays a
   // candidate once its slot leaves, or its gap would go unreported, even
-  // when the slot leaves in the dry-run pass that recorded its colo.
+  // when the slot leaves in the pass, in observe mode, that recorded its colo.
   test("keeps a registered slot's colo a candidate after the slot leaves", async () => {
     await world.seed("scheduler-ord", ORD, T0_MS - HOUR_MS);
     const cls = scriptedClass([]);

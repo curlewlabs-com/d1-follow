@@ -33,10 +33,11 @@ function modeRows(): Record<string, unknown>[] {
 }
 
 describe("the modes", () => {
-  // Nothing acts until someone sets a mode: a missing row must read as dry-run.
-  test("a class or lane with no mode set is in dry-run", async () => {
+  // Nothing acts until someone sets a mode: a missing row must read as observe
+  // mode.
+  test("a class or lane with no mode set is in observe mode", async () => {
     expect((await readModes(db)).modeOf("class", STATELESS_CLASS)).toBe(
-      "dry_run",
+      "observe",
     );
   });
 
@@ -51,13 +52,13 @@ describe("the modes", () => {
     const modes = await readModes(db);
     expect(modes.modeOf("lane", 1)).toBe("act");
     // The same code under the other kind is a different subject.
-    expect(modes.modeOf("class", 1)).toBe("dry_run");
+    expect(modes.modeOf("class", 1)).toBe("observe");
     expect(modeRows()).toEqual([{ op_id: "a", lane_code: 1, mode: 2 }]);
   });
 });
 
 describe("a lane's mode changes", () => {
-  const change = (mode: "dry_run" | "act", atMs: number, code = 1) =>
+  const change = (mode: "observe" | "act", atMs: number, code = 1) =>
     setMode(db, {
       kind: "lane",
       code,
@@ -70,7 +71,7 @@ describe("a lane's mode changes", () => {
   // can answer once the mode has changed again.
   test("reads oldest first, for its lane only, whatever order they landed", async () => {
     await change("act", AT_MS + 2_000);
-    await change("dry_run", AT_MS + 1_000);
+    await change("observe", AT_MS + 1_000);
     await change("act", AT_MS, 2);
     await setMode(db, {
       kind: "class",
@@ -80,7 +81,7 @@ describe("a lane's mode changes", () => {
       atMs: AT_MS,
     });
     expect(await readLaneModeChanges(db, 1, 10)).toEqual([
-      { atMs: AT_MS + 1_000, mode: "dry_run" },
+      { atMs: AT_MS + 1_000, mode: "observe" },
       { atMs: AT_MS + 2_000, mode: "act" },
     ]);
   });
@@ -93,10 +94,10 @@ describe("a lane's mode changes", () => {
   // read keeps the newest: what a mode was lately is what a grade asks.
   test("keeps the newest changes at its limit, still oldest first", async () => {
     await change("act", AT_MS);
-    await change("dry_run", AT_MS + 1_000);
+    await change("observe", AT_MS + 1_000);
     await change("act", AT_MS + 2_000);
     expect(await readLaneModeChanges(db, 1, 2)).toEqual([
-      { atMs: AT_MS + 1_000, mode: "dry_run" },
+      { atMs: AT_MS + 1_000, mode: "observe" },
       { atMs: AT_MS + 2_000, mode: "act" },
     ]);
   });

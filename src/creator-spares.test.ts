@@ -130,8 +130,8 @@ describe("observing the spares", () => {
     ]);
   });
 
-  // Marking writes to the object, which a class in dry-run never does.
-  test("takes out rather than marks a spare in dry-run", async () => {
+  // Marking writes to the object, which a class in observe mode never does.
+  test("takes out rather than marks a spare in observe mode", async () => {
     await spare("scheduler-spare", ORD, T0_MS - HOUR_MS);
     cls.where.set("scheduler-spare", ORD);
     const report = await world.pass(cls);

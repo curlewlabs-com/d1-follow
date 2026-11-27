@@ -46,7 +46,7 @@ export async function readCandidateColos(db: SqlDatabase): Promise<Colo[]> {
 // Adds a candidate colo while `holder` holds the pass lease, and, with
 // `endWaits`, in the same batch deletes every hint's wait: a colo nobody knew
 // Cloudflare places objects in says the hints have more to teach. A pass in
-// which no class acts adds without it, since dry-run writes none of the
+// which no class acts adds without it, since observe mode writes none of the
 // pacing's state. Adding one already there changes nothing but the waits.
 // False when `holder` does not hold the lease, and nothing was written: like
 // every write of the pacing's state, it acts only for the pass that holds the

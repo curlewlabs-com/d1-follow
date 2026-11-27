@@ -19,7 +19,7 @@ follows the primary when it moves:
 - **A creator**: a separate cron-driven Worker that keeps a verified object of
   each class waiting in each colo Cloudflare places objects in, so nothing has
   to be created at the moment the primary moves. It comes with its own D1
-  schema, a ledger of every act, and a dry-run mode for each class, lane and
+  schema, a ledger of every act, and an observe mode for each class, lane and
   router.
 - **A census** that reconciles every stored object with the creator's records.
 
@@ -147,8 +147,8 @@ and a binding to your app's database. Each cron calls `runCreatorPass` with a
 `CreatorConfig`: your classes (each with its own code, name form, and the
 observe, place, mark-in-place and release calls your objects expose), the region
 hint to start from, and the bounds that size the pass's cost. Everything starts
-in dry-run, which logs what it would do; switch a class to act with `setMode`
-once its log looks right.
+in observe mode, which logs what it would do; switch a class to act with
+`setMode` once its log looks right.
 
 The place, mark-in-place and release calls each receive a `deadlineMs`, and each
 must refuse once the object's own clock reads past it, before it touches
@@ -466,22 +466,22 @@ young gap keeps probing on every pass.
   ahead than its own length, is dropped and the round runs, so a cap since
   lowered, a clock that ran backward or a hand edit never silences the probes.
   So is a wait set before the newest candidate colo joined: the round that set
-  it did not know of the colo, as when a pass with every class in dry-run, or an
-  older build, added it and ended no wait. A pass in which a class acts also
-  deletes the wait of a hint the creator no longer probes through, such as an
-  app hint its configuration has since changed, so the hint's first round is
+  it did not know of the colo, as when a pass with every class in observe mode,
+  or an older build, added it and ended no wait. A pass in which a class acts
+  also deletes the wait of a hint the creator no longer probes through, such as
+  an app hint its configuration has since changed, so the hint's first round is
   open if it comes back.
 - **Fenced by the lease.** Each write of a wait, and the batch that adds a colo
   and deletes the waits, names the pass lease in its own statements, so a pass
   that stalled and lost its lease cannot put back a wait the pass holding it
   deleted.
-- **Dry-run** makes no probe and writes no wait, and logs the hints it would
-  probe through. A pass with every class in dry-run still adds a registered
-  slot's colo to the candidates, so the colo is not lost if the slot then
-  leaves, but ends no wait, and reports that as a failure while a wait stands;
-  the first pass in which a class acts drops each such wait. A pass's report
-  names the hints a class that acts probed through (`regionHintsProbed`), beside
-  every hint the creator holds (`regionHints`).
+- **Observe mode** makes no probe and writes no wait, and logs the hints it
+  would probe through. A pass with every class in observe mode still adds a
+  registered slot's colo to the candidates, so the colo is not lost if the slot
+  then leaves, but ends no wait, and reports that as a failure while a wait
+  stands; the first pass in which a class acts drops each such wait. A pass's
+  report names the hints a class that acts probed through (`regionHintsProbed`),
+  beside every hint the creator holds (`regionHints`).
 
 What the cap bounds is the cost of a steady day: a hint whose rounds teach
 nothing is probed once per class per cap, where it was probed once per class per
@@ -514,8 +514,9 @@ and one a day after.
   that writes the creation's intent, before its call: neither stands without the
   other, and a pass that stops partway has recorded what it created, and fails
   toward fewer attempts, never more. A gap's age is wall time from its first
-  creation, whether or not later passes can create: a class in dry-run, or one
-  with an attempt left open, makes no creation, and its gap ages all the same.
+  creation, whether or not later passes can create: a class in observe mode, or
+  one with an attempt left open, makes no creation, and its gap ages all the
+  same.
 - **Young again.** A record no attempt has followed since it began has paced no
   attempt: a probe began it while the primary was elsewhere, or while the
   primary's region named no hint. The first pass that can attempt the gap starts
@@ -550,7 +551,7 @@ and one a day after.
 - **Fenced by the lease.** Each write of a record names the pass lease in its
   own statement, so a pass that stalled and lost its lease cannot put back a
   record the pass holding it deleted.
-- **Dry-run** writes no record, and logs whether the attempts are due.
+- **Observe mode** writes no record, and logs whether the attempts are due.
 
 A pass creates no more than the bound allows whatever the pacing: per class, one
 probe through each region hint and the attempts bound.
@@ -753,11 +754,11 @@ tool's tables.
 Each class, each lane, and each stateless class's forwarding has a mode, held in
 the creator's database. A class's mode covers the creator's creations and
 releases of its objects. Forwarding and a lane's handoffs move traffic, so each
-has its own, and an app can keep slots before it lets anything move. Dry-run,
-the default, logs every forward, hint, handoff, creation and release it would
-make, and makes none. Act makes them. Admission and redirects run in either
-mode, because they keep a lane single even when its record was changed by hand.
-A stateless object sees a mode change within its registry cache window.
+has its own, and an app can keep slots before it lets anything move. Observe
+mode, the default, logs every forward, hint, handoff, creation and release it
+would make, and makes none. Act makes them. Admission and redirects run in
+either mode, because they keep a lane single even when its record was changed by
+hand. A stateless object sees a mode change within its registry cache window.
 
 ## Ledger
 
@@ -828,8 +829,8 @@ stays useful with the app swapped for another.
   from where its creations land, starting from the colos of any slots already
   registered; [where.durableobjects.live](https://where.durableobjects.live/)
   tracks which colos each hint lands in, which its probes should rediscover.
-- Deploy the creator beside the app in each environment, in dry-run. Once its
-  log shows the slots it would create, set it to act.
+- Deploy the creator beside the app in each environment, in observe mode. Once
+  its log shows the slots it would create, set it to act.
 - A colo the hint never reaches is a gap to fill by hand, through a launch point
   there.
 - **After a Time Travel restore of the creator's database**, the registry, the
