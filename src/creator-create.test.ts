@@ -272,7 +272,9 @@ describe("attempts", () => {
 
   // The failure this guards: a registration batch that commits and loses its
   // reply. Emptying the object then would leave a registered slot with no
-  // marker, so the object is left as placed, and the next pass verifies it.
+  // marker, so the object is left as placed, the pass keeps its lease so no
+  // other pass resolves the name before the batch lands, and the next pass
+  // verifies it.
   test("keeps a slot whose registration committed and lost its reply", async () => {
     await world.act();
     const cls = scriptedClass([ORD]);
@@ -296,6 +298,9 @@ describe("attempts", () => {
     ]);
     expect(cls.releasedNames).toEqual([]);
     expect(await readOpenIntents(world.handle(), world.clock + 1)).toEqual([]);
+    // A batch that failed may still land, so the pass kept its lease: no
+    // pass can resolve the name before its lease lapses.
+    expect((await world.pass(cls)).skipped).toBe(true);
 
     world.clock += HOUR_MS;
     const next = await world.pass(cls, { attemptsPerClassPerPass: 1 });
