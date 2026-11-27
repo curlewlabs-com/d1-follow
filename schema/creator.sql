@@ -187,9 +187,9 @@ CREATE TABLE IF NOT EXISTS follow_region_hint (
 -- candidates doubles the wait, up to the cap; a creation that lands in a new
 -- colo deletes every row in the batch that adds the colo.
 CREATE TABLE IF NOT EXISTS follow_hint_wait (
-  region_hint TEXT PRIMARY KEY CHECK (
-    length(region_hint) > 0 AND region_hint NOT GLOB '*[^a-z]*'
-  ),
+  -- The hint as the pass hands it to the app's calls, the app's own included,
+  -- so it takes whatever form the app's configuration gives it.
+  region_hint TEXT PRIMARY KEY CHECK (length(region_hint) > 0),
   -- Each time is held to the integers a pass reads exactly, as follow_gap's
   -- are, so no row can stop the pass that reads it (src/creator-hints.ts drops
   -- a wait it cannot trust).

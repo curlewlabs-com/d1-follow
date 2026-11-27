@@ -248,6 +248,38 @@ describe("rounds", () => {
     expect(waiting.wouldCreate).toEqual([]);
   });
 
+  // The app's own hint is whatever its configuration says, and the pass hands
+  // it to the app's calls as it is, so its wait is kept under that same key.
+  test("keeps the wait of an app hint in the form the app gives it", async () => {
+    world.clock = T0_MS;
+    const report = await world.pass(cls, { regionHint: "ENAM", laneCodes: [] });
+    expect(report.failures).toEqual([]);
+    expect(report.regionHints).toEqual(["ENAM", "enam"]);
+    expect(await waits()).toEqual([wait("ENAM", 2, 2), wait("enam", 2, 2)]);
+  });
+
+  // A class with attempts open creates nothing until they resolve, so its
+  // dry-run forecast says so and does not count it as one that would create.
+  test("forecasts a dry-run class behind open attempts as conditional", async () => {
+    world.creator
+      .query(
+        "INSERT INTO follow_open_intent (op_id, class_code, name, at_ms) VALUES ('op-open', ?, 'scheduler-test-enam-9', ?)",
+      )
+      .run(SCHEDULER, T0_MS - HOUR_MS);
+    await setMode(world.handle(), {
+      kind: "class",
+      code: SCHEDULER,
+      mode: "dry_run",
+      opId: "dry",
+      atMs: T0_MS,
+    });
+    const report = await at(0);
+    expect(report.wouldCreate).toEqual([]);
+    expect(world.lines).toContain(
+      "[follow] scheduler dry-run - would resolve its open attempts first, then probe through enam",
+    );
+  });
+
   // The risk this guards: a probe whose outcome was never recorded, its
   // intent left open, taken for a round's usable answer, which would slow the
   // probes on an answer the pass did not keep.

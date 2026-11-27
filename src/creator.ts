@@ -773,13 +773,11 @@ async function runLeasedPass(
   // deletes every wait, so the next pass's rounds open for all of them.
   const inRound = (hint: string): boolean =>
     hintPacing.get(hint)?.round ?? true;
-  // What the probes taught, by hint: each hint a class that acts probed
-  // through, each one a probe through it answered with a colo, and each one a
-  // probe answered from a colo that was no candidate. A probe left open, or
-  // one that answered with no colo, counts for nothing.
-  const made = new Set<string>();
+  // Each hint a probe through it gave a usable answer: a colo, with its
+  // outcome recorded. A probe left open, or one that answered with no colo,
+  // counts for nothing. An answer from a colo that was no candidate added the
+  // colo, which ends every wait (candidates.addedAny).
   const usable = new Set<string>();
-  const taught = new Set<string>();
   // Reported as each probe's call is made, so a pass that stops partway
   // reports the probes it made.
   const probed = new Set<string>();
@@ -866,10 +864,15 @@ async function runLeasedPass(
         paced.pacing.due &&
         primaryHint !== null &&
         (budget.get(cls.code) ?? 0) > 0;
-      if (hints.length > 0 || due) report.wouldCreate.push(cls.code);
+      // A class with attempts open creates nothing until they resolve, so
+      // what it would create is a forecast on that, and it is not counted.
+      const held = unresolved.has(cls.code);
+      if (!held && (hints.length > 0 || due)) {
+        report.wouldCreate.push(cls.code);
+      }
       const note = waitNote();
       log(
-        `[follow] ${cls.label} dry-run - would probe through ${hints.length > 0 ? hints.join(",") : "no hint"}${due ? ` and attempt the gap in ${paced.colo}` : ""}${note === null ? "" : `; ${note}`}`,
+        `[follow] ${cls.label} dry-run - would ${held ? "resolve its open attempts first, then " : ""}probe through ${hints.length > 0 ? hints.join(",") : "no hint"}${due ? ` and attempt the gap in ${paced.colo}` : ""}${note === null ? "" : `; ${note}`}`,
       );
       continue;
     }
@@ -967,13 +970,13 @@ async function runLeasedPass(
       continue;
     }
     // Makes one creation through `regionHint`, and resolves the colo it
-    // answered from and whether that colo was already a candidate, or null
-    // when its answer was lost or its outcome was not recorded. `dispatched`
-    // runs as the creation's call is made.
+    // answered from, or null when it answered with none, its answer was lost
+    // or its outcome was not recorded. `dispatched` runs as the creation's
+    // call is made.
     const attempt = async (
       regionHint: string,
       dispatched?: () => void,
-    ): Promise<{ colo: Colo | null; known: boolean } | null> => {
+    ): Promise<Colo | null> => {
       await hold();
       const opId = deps.newOpId();
       const { name } = await beginCreation(db, {
@@ -983,11 +986,10 @@ async function runLeasedPass(
         nameOf: (n) => cls.nameOf(n, regionHint),
         objectIdOf: (name) => cls.objectIdOf(name),
       });
-      let answer: { colo: Colo | null; known: boolean } | null = null;
+      let answer: Colo | null = null;
       try {
         dispatched?.();
         const { colo } = await call(() => cls.observe(name, regionHint));
-        const known = colo !== null && candidates.has(colo);
         const role = roleOf(cls, colo);
         if (colo !== null && role !== null) {
           await keep(cls, name, colo, opId, role);
@@ -996,7 +998,7 @@ async function runLeasedPass(
         }
         // Only once its outcome is recorded: a creation whose intent stays
         // open counts for nothing in its round, whatever it answered.
-        answer = { colo, known };
+        answer = colo;
       } catch (error) {
         if (error instanceof LeaseLost) throw error;
         // The intent stays open for a later pass to resolve by observing.
@@ -1010,10 +1012,7 @@ async function runLeasedPass(
       const answer = await attempt(regionHint, () => {
         reportProbed(regionHint);
       });
-      made.add(regionHint);
-      if (answer === null || answer.colo === null) continue;
-      usable.add(regionHint);
-      if (!answer.known) taught.add(regionHint);
+      if (answer !== null) usable.add(regionHint);
     }
     const paced = paceNow();
     if (paced !== null && paced.pacing.due && primaryHint !== null) {
@@ -1042,9 +1041,10 @@ async function runLeasedPass(
     (c) => modes.modeOf("class", c.code) === "act",
   );
   for (const [hint, pacing] of candidates.addedAny ? [] : hintPacing) {
-    const taughtNothing =
-      pacing.round && made.has(hint) && usable.has(hint) && !taught.has(hint);
-    const wait = taughtNothing ? nextHintWait(hint, pacing, clock) : null;
+    const wait =
+      pacing.round && usable.has(hint)
+        ? nextHintWait(hint, pacing, clock)
+        : null;
     if (wait !== null) {
       if (!(await writeHintWait(db, wait, fence.holder))) throw new LeaseLost();
       log(
