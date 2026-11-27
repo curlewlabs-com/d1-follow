@@ -18,16 +18,23 @@ import { HOLDS_PASS_LEASE } from "./pass-lease";
 // that lost its lease cannot put back a record the next pass deleted.
 export const GAP_SQL = {
   readGaps:
-    "SELECT class_code, colo, begun_at_ms, attempted_at_ms FROM follow_gap ORDER BY class_code, colo",
-  writeGap: `INSERT INTO follow_gap (class_code, colo, begun_at_ms, attempted_at_ms) SELECT ?, ?, ?, ? WHERE ${HOLDS_PASS_LEASE} ON CONFLICT (class_code, colo) DO UPDATE SET begun_at_ms = excluded.begun_at_ms, attempted_at_ms = excluded.attempted_at_ms RETURNING class_code`,
+    "SELECT class_code, colo, kind, begun_at_ms, attempted_at_ms FROM follow_gap ORDER BY class_code, colo",
+  writeGap: `INSERT INTO follow_gap (class_code, colo, kind, begun_at_ms, attempted_at_ms) SELECT ?, ?, ?, ?, ? WHERE ${HOLDS_PASS_LEASE} ON CONFLICT (class_code, colo) DO UPDATE SET kind = excluded.kind, begun_at_ms = excluded.begun_at_ms, attempted_at_ms = excluded.attempted_at_ms RETURNING class_code`,
   deleteGap: `DELETE FROM follow_gap WHERE class_code = ? AND colo = ? AND ${HOLDS_PASS_LEASE}`,
   // Read in the delete's own batch, so it answers for the same moment.
   holdsLease: `SELECT 1 AS held WHERE ${HOLDS_PASS_LEASE}`,
 } as const;
 
+// What a class lacks in a colo: its slot there, or, with its slot there, the
+// spares it keeps beside the primary.
+export type GapKind = "slot" | "spares";
+
+const GAP_KIND_CODE: Readonly<Record<GapKind, number>> = { slot: 1, spares: 2 };
+
 export interface GapRecord {
   readonly classCode: number;
   readonly colo: Colo;
+  readonly kind: GapKind;
   readonly begunAtMs: number;
   // Null while no attempt through the primary's hint has been made since the
   // record began.
@@ -44,9 +51,17 @@ export async function readGaps(db: SqlDatabase): Promise<GapRecord[]> {
       );
     }
     const attempted = field(row, "attempted_at_ms");
+    const code = integerField(row, "kind");
+    const kind = (Object.keys(GAP_KIND_CODE) as GapKind[]).find(
+      (k) => GAP_KIND_CODE[k] === code,
+    );
+    if (kind === undefined) {
+      throw new CreatorStoreError(`kind is not a gap kind: ${String(code)}`);
+    }
     return {
       classCode: integerField(row, "class_code"),
       colo,
+      kind,
       begunAtMs: integerField(row, "begun_at_ms"),
       attemptedAtMs:
         attempted === null ? null : integerField(row, "attempted_at_ms"),
@@ -66,6 +81,7 @@ export async function writeGap(
     .bind(
       record.classCode,
       record.colo,
+      GAP_KIND_CODE[record.kind],
       record.begunAtMs,
       record.attemptedAtMs,
       holder,

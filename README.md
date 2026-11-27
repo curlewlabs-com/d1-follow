@@ -447,10 +447,17 @@ attempt fills gets about 24 rounds in its first day and one a day after.
 - **Its end.** A pass deletes a gap's record when it sees the gap filled, or
   sees that the class no longer has it: a colo that is neither a candidate nor
   the primary's, or a shortfall of spares in a colo the primary has left. A gap
-  that returns is a new one, young again. A pass that cannot read where the
-  primary is makes no attempts and leaves every record as it is, since it cannot
-  tell which colo the attempts are for, or whether a shortfall of spares is
-  still one.
+  that returns is a new one, young again.
+- **Its kind.** A record keeps what the class lacks: its slot in the colo, or,
+  with its slot in the primary's colo, the spares it keeps there. A pass that
+  sees the gap change kind deletes the record, and the gap is a new one. So a
+  shortfall of spares that has waited past its first day does not hold back the
+  attempts once the slot beside the primary is lost too, and a probe that
+  restores the slot leaves the remaining shortfall a fresh gap. The pass reads
+  the gap after its probes, so a probe that changes it counts before any
+  attempt. A pass that cannot read where the primary is makes no attempts and
+  leaves every record as it is, since it cannot tell which colo the attempts are
+  for, or whether a shortfall of spares is still one.
 - **Thresholds, not timers.** Each threshold is read by a pass: it ends on the
   first pass that begins at or after it, less half a pass, so a cron that fires
   a little early is not taken for one that came too soon. The time between two

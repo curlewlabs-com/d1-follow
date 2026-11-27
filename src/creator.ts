@@ -12,7 +12,7 @@
 import { readLaneChangesAfter, readLaneHolders } from "./app-lane-reads";
 import type { Colo } from "./colo";
 import { PassCandidates, syncRegionHints } from "./creator-candidates";
-import { paceAttempts } from "./creator-gaps";
+import { paceAttempts, type AttemptPacing } from "./creator-gaps";
 import { observeSlots } from "./creator-slots";
 import { observeSpares, settleSpares } from "./creator-spares";
 import {
@@ -31,7 +31,13 @@ import {
   type Slot,
   type SqlDatabase,
 } from "./creator-store";
-import { deleteGap, readGaps, writeGap, type GapRecord } from "./gap-store";
+import {
+  deleteGap,
+  readGaps,
+  writeGap,
+  type GapKind,
+  type GapRecord,
+} from "./gap-store";
 import { LANE_HANDOFF_SETTLE_MS } from "./lane";
 import { claimPass, releasePass, renewPass } from "./pass-lease";
 import { registerSpare, stampSpareVerified } from "./spare-store";
@@ -207,6 +213,14 @@ export interface CreatorPassReport {
 // What a kept object becomes: its colo's base slot, or a spare beside the
 // primary's.
 type Role = "base" | "spare";
+
+// The attempts' pacing for the gap in the primary's colo, with the gap's
+// colo and kind as the pacing read them.
+interface Paced {
+  readonly colo: Colo;
+  readonly kind: GapKind;
+  readonly pacing: AttemptPacing;
+}
 
 // Raised when the pass finds another pass holding its lease.
 class LeaseLost extends Error {}
@@ -709,86 +723,116 @@ async function runLeasedPass(
     gapRecords.set(gapKey(record.classCode, record.colo), record);
   }
   for (const cls of config.classes) {
-    // The primary's colo is short while the class has no base slot there or
-    // fewer spares than it keeps.
+    // What the class lacks in `colo` as the pass stands now, or null for no
+    // gap: its slot there, in a candidate colo or the primary's, or, with its
+    // slot in the primary's colo, the spares it keeps there.
+    const gapIn = (colo: Colo): GapKind | null => {
+      if (!holds(cls.code, colo)) {
+        return colo === primary?.colo || candidates.has(colo) ? "slot" : null;
+      }
+      return colo === primary?.colo && sparesShort(cls) ? "spares" : null;
+    };
     const primaryGap = (): boolean =>
-      primary !== null && (!holds(cls.code, primary.colo) || sparesShort(cls));
-    // A pass that could not read where the primary is cannot say which colo
-    // the attempts are for, so it makes none and judges no record.
-    const pacing =
-      primary === null
-        ? null
-        : paceAttempts(gapRecords.get(gapKey(cls.code, primary.colo)), {
-            passStartMs,
-            capMs: config.maxBackoffMs,
-            passIntervalMs: config.passIntervalMs,
-          });
+      primary !== null && gapIn(primary.colo) !== null;
+    // How the attempts at the gap in the primary's colo are paced, read as
+    // the pass stands when asked, so a probe that changed the gap counts.
+    // The gap's record paces them only while it is of the gap's kind: a slot
+    // lost where only spares were short, or the reverse, is a new gap. Null
+    // with no gap, or when the pass could not read where the primary is,
+    // since it cannot say which colo the attempts are for.
+    const paceNow = (): Paced | null => {
+      if (primary === null) return null;
+      const kind = gapIn(primary.colo);
+      if (kind === null) return null;
+      const record = gapRecords.get(gapKey(cls.code, primary.colo));
+      return {
+        colo: primary.colo,
+        kind,
+        pacing: paceAttempts(record?.kind === kind ? record : undefined, {
+          passStartMs,
+          capMs: config.maxBackoffMs,
+          passIntervalMs: config.passIntervalMs,
+        }),
+      };
+    };
     // Only a hint the primary's own region names is attempted through: a
     // region that names none would leave the attempts a guess, spending them
     // for nothing, and begin a record that ages the gap before the right hint
-    // could reach it. Null when no attempt is due.
+    // could reach it.
     const primaryHint = primary?.regionHint ?? null;
-    const attemptHint = pacing?.due === true ? primaryHint : null;
-    // When a waiting gap is next attempted, read as it stands when logged, so
-    // a gap a probe has just filled, or one no hint can reach, names no time.
-    const waitNote = (): string | null =>
-      primary !== null &&
-      primaryHint !== null &&
-      pacing !== null &&
-      pacing.dueAtMs !== null &&
-      primaryGap()
-        ? `the gap in ${primary.colo} is next attempted by a pass from ${new Date(pacing.dueAtMs).toISOString()}`
+    // When a waiting gap is next attempted, read when logged, so a gap a
+    // probe has just filled, or one no hint can reach, names no time.
+    const waitNote = (): string | null => {
+      const paced = paceNow();
+      return paced !== null &&
+        primaryHint !== null &&
+        paced.pacing.dueAtMs !== null
+        ? `the gap in ${paced.colo} is next attempted by a pass from ${new Date(paced.pacing.dueAtMs).toISOString()}`
         : null;
+    };
     if (modes.modeOf("class", cls.code) !== "act") {
       report.wouldCreate.push(cls.code);
+      const paced = paceNow();
+      const due = paced !== null && paced.pacing.due && primaryHint !== null;
       const note = waitNote();
       log(
-        `[follow] ${cls.label} dry-run - would probe through ${regionHints.join(",")}${primaryGap() && attemptHint !== null && primary !== null ? ` and attempt the gap in ${primary.colo}` : ""}${note === null ? "" : `; ${note}`}`,
+        `[follow] ${cls.label} dry-run - would probe through ${regionHints.join(",")}${due ? ` and attempt the gap in ${paced.colo}` : ""}${note === null ? "" : `; ${note}`}`,
       );
       continue;
     }
-    // A gap's record goes once a pass sees the gap filled, or sees the class
-    // no longer has it: a colo that is no candidate and no longer the
+    // A gap's record goes once a pass sees the gap filled, of another kind,
+    // or gone from the class: a colo that is no candidate and no longer the
     // primary's, or a shortfall of spares in a colo the primary has left. A
-    // gap that returns is then a new one. After attempting, the gap still
-    // open beside the primary records the attempt, and a record the pass
-    // could not trust goes even when no attempt replaced it. Each write is
-    // guarded on the lease, so a pass that lost it cannot put back what the
-    // next one deleted, and stops on finding it lost.
-    const settleGaps = async (attempted: boolean): Promise<void> => {
-      if (primary === null || pacing === null) return;
-      const open = (colo: Colo): boolean =>
-        colo === primary.colo
-          ? primaryGap()
-          : candidates.has(colo) && !holds(cls.code, colo);
-      const untrusted = pacing.reason === "untrusted";
-      const recording = attempted && primaryGap();
+    // gap that returns or changes kind is then a new one. After attempting,
+    // the gap still open beside the primary records the attempt, under the
+    // kind it has then, and a record the pass could not trust goes even when
+    // no attempt replaced it. Each write is guarded on the lease, so a pass
+    // that lost it cannot put back what the next one deleted, and stops on
+    // finding it lost. `paced` is the pacing the attempts ran under.
+    const settleGaps = async (
+      paced: Paced | null,
+      attempted: boolean,
+    ): Promise<void> => {
+      if (primary === null) return;
+      const recording = attempted ? gapIn(primary.colo) : null;
+      const untrusted = paceNow()?.pacing.reason === "untrusted";
       for (const record of gapRecords.values()) {
         if (record.classCode !== cls.code) continue;
-        const dropped = untrusted && record.colo === primary.colo && !recording;
-        if (open(record.colo) && !dropped) continue;
+        const kind = gapIn(record.colo);
+        const dropped =
+          untrusted &&
+          record.colo === primary.colo &&
+          kind === record.kind &&
+          recording === null;
+        if (kind === record.kind && !dropped) continue;
         if (!(await deleteGap(db, record, fence.holder))) {
           throw new LeaseLost();
         }
         log(
           dropped
             ? `[follow] ${cls.label} gap record in ${record.colo} cannot be trusted - deleted`
-            : `[follow] ${cls.label} gap in ${record.colo} closed - its record is deleted`,
+            : kind === null
+              ? `[follow] ${cls.label} gap in ${record.colo} closed - its record is deleted`
+              : `[follow] ${cls.label} gap in ${record.colo} is now ${kind === "slot" ? "a missing slot" : "a shortfall of spares"} - its record is deleted`,
         );
       }
-      if (!recording) return;
+      if (recording === null) return;
       const written = await writeGap(
         db,
         {
           classCode: cls.code,
           colo: primary.colo,
-          begunAtMs: pacing.begunAtMs,
+          kind: recording,
+          // A gap whose kind changed under this pass's attempts began with
+          // them.
+          begunAtMs:
+            paced?.kind === recording ? paced.pacing.begunAtMs : passStartMs,
           attemptedAtMs: passStartMs,
         },
         fence.holder,
       );
       if (!written) throw new LeaseLost();
-      if (untrusted) {
+      if (paced?.pacing.reason === "untrusted") {
         log(
           `[follow] ${cls.label} gap record in ${primary.colo} cannot be trusted - replaced`,
         );
@@ -798,7 +842,7 @@ async function runLeasedPass(
       log(
         `[follow] ${cls.label} has attempts still open - no new attempts this pass`,
       );
-      await settleGaps(false);
+      await settleGaps(null, false);
       continue;
     }
     const attempt = async (regionHint: string): Promise<void> => {
@@ -828,18 +872,19 @@ async function runLeasedPass(
     for (const regionHint of regionHints) {
       await attempt(regionHint);
     }
+    const paced = paceNow();
     let attempted = false;
-    if (attemptHint !== null) {
+    if (paced !== null && paced.pacing.due && primaryHint !== null) {
       const attempts = budget.get(cls.code) ?? 0;
       for (let i = 0; i < attempts && primaryGap(); i++) {
         attempted = true;
-        await attempt(attemptHint);
+        await attempt(primaryHint);
       }
     } else {
       const note = waitNote();
       if (note !== null) log(`[follow] ${cls.label} ${note}`);
     }
-    await settleGaps(attempted);
+    await settleGaps(paced, attempted);
   }
 
   // Release what has been out of the registry long enough and holds no lane.

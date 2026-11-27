@@ -26,18 +26,23 @@ test("a gap's record reads back, and a later write replaces it", async () => {
   const first = {
     classCode: SCHEDULER,
     colo: MIA,
+    kind: "slot" as const,
     begunAtMs: T0_MS,
     attemptedAtMs: null,
   };
   expect(await writeGap(db, first, HOLDER)).toBe(true);
   expect(
-    await writeGap(db, { ...first, colo: ORD, attemptedAtMs: T0_MS }, HOLDER),
+    await writeGap(
+      db,
+      { ...first, colo: ORD, kind: "spares", attemptedAtMs: T0_MS },
+      HOLDER,
+    ),
   ).toBe(true);
   const later = { ...first, attemptedAtMs: T0_MS + 1 };
   expect(await writeGap(db, later, HOLDER)).toBe(true);
   expect(await readGaps(db)).toEqual([
     later,
-    { ...first, colo: ORD, attemptedAtMs: T0_MS },
+    { ...first, colo: ORD, kind: "spares", attemptedAtMs: T0_MS },
   ]);
 
   expect(await deleteGap(db, later, HOLDER)).toBe(true);
@@ -54,6 +59,7 @@ test("writes and deletes nothing for a pass that lost its lease", async () => {
   const record = {
     classCode: SCHEDULER,
     colo: MIA,
+    kind: "slot" as const,
     begunAtMs: T0_MS,
     attemptedAtMs: T0_MS,
   };

@@ -196,10 +196,14 @@ CREATE TABLE IF NOT EXISTS follow_backoff (
 -- class has a gap in each candidate colo where it has no slot, and in the
 -- primary's colo while it has no slot there or fewer spares than it keeps. A
 -- gap no pass has created for has no row. A pass deletes the row once it sees
--- the gap filled or gone, so a gap that returns is a new one.
+-- the gap filled, gone, or of another kind, so a gap that returns, or a lost
+-- slot where only spares were short, is a new one.
 CREATE TABLE IF NOT EXISTS follow_gap (
   class_code INTEGER NOT NULL CHECK (class_code > 0),
   colo TEXT NOT NULL CHECK (colo GLOB '[A-Z][A-Z][A-Z]'),
+  -- 1 the class has no slot in the colo, 2 it has its slot there and fewer
+  -- spares than it keeps, which is a gap only in the primary's colo.
+  kind INTEGER NOT NULL CHECK (kind IN (1, 2)),
   -- When the pass that made the gap's first creation began.
   begun_at_ms INTEGER NOT NULL,
   -- When the pass that last attempted the gap through the hint for the

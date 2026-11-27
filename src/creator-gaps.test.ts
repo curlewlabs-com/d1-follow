@@ -19,7 +19,7 @@ import {
   scriptedClass,
   type ScriptedClass,
 } from "./creator-test-harness";
-import { readGaps, type GapRecord } from "./gap-store";
+import { readGaps, type GapKind, type GapRecord } from "./gap-store";
 
 const ATTEMPTS = 2;
 // What a pass creates: its probe through the one hint, and the attempts when
@@ -57,9 +57,11 @@ const gap = (
   colo: Colo,
   begunHours: number,
   attemptedHours: number | null,
+  kind: GapKind = "slot",
 ): GapRecord => ({
   classCode: SCHEDULER,
   colo,
+  kind,
   begunAtMs: T0_MS + begunHours * HOUR_MS,
   attemptedAtMs:
     attemptedHours === null ? null : T0_MS + attemptedHours * HOUR_MS,
@@ -70,9 +72,15 @@ const gap = (
 function seedGap(record: GapRecord): void {
   world.creator
     .query(
-      "INSERT INTO follow_gap (class_code, colo, begun_at_ms, attempted_at_ms) VALUES (?, ?, ?, ?)",
+      "INSERT INTO follow_gap (class_code, colo, kind, begun_at_ms, attempted_at_ms) VALUES (?, ?, ?, ?, ?)",
     )
-    .run(record.classCode, record.colo, record.begunAtMs, record.attemptedAtMs);
+    .run(
+      record.classCode,
+      record.colo,
+      record.kind === "slot" ? 1 : 2,
+      record.begunAtMs,
+      record.attemptedAtMs,
+    );
 }
 
 const gaps = async (): Promise<GapRecord[]> => await readGaps(world.handle());
@@ -275,15 +283,55 @@ describe("the gap's record", () => {
     world.primary = { colo: ORD, region: "ENAM" };
 
     expect(creations(await at(0, withSpare))).toBe(ATTEMPTING);
-    expect(await gaps()).toEqual([gap(ORD, 0, 0)]);
+    expect(await gaps()).toEqual([gap(ORD, 0, 0, "spares")]);
 
     world.primary = { colo: MIA, region: "ENAM" };
     await at(1, withSpare);
-    expect(await gaps()).toEqual([gap(MIA, 1, 1)]);
+    expect(await gaps()).toEqual([gap(MIA, 1, 1, "spares")]);
 
     world.primary = { colo: ORD, region: "ENAM" };
     expect(creations(await at(30, withSpare))).toBe(ATTEMPTING);
-    expect(await gaps()).toEqual([gap(ORD, 30, 30)]);
+    expect(await gaps()).toEqual([gap(ORD, 30, 30, "spares")]);
+  });
+
+  // The risk this guards: a shortfall of spares that has outlived its first
+  // day waits a day between attempts, and the class's slot beside the
+  // primary then leaves. The class has nothing there to move to, so the lost
+  // slot is a new gap with its own young day, not the old shortfall's wait.
+  test("starts over when the slot beside the primary is lost where only spares were short", async () => {
+    await world.seed("scheduler-iad", IAD, T0_MS);
+    cls.where.set("scheduler-iad", IAD);
+    landings.splice(0, landings.length, ...Array(400).fill(IAD));
+    const withSpare: ScriptedClass = { ...cls, spares: 1 };
+    world.primary = { colo: ORD, region: "ENAM" };
+    await at(0, withSpare);
+    expect(creations(await at(24, withSpare))).toBe(ATTEMPTING);
+    expect(creations(await at(25, withSpare))).toBe(PROBE_ONLY);
+    expect(await gaps()).toEqual([gap(ORD, 0, 24, "spares")]);
+
+    cls.where.set("scheduler-ord", IAD);
+    const lost = await at(26, withSpare);
+    expect(lost.unregistered.map((o) => o.name)).toEqual(["scheduler-ord"]);
+    expect(creations(lost)).toBe(ATTEMPTING);
+    expect(await gaps()).toEqual([gap(ORD, 26, 26)]);
+    expect(creations(await at(27, withSpare))).toBe(ATTEMPTING);
+  });
+
+  // The reverse: a probe restores the slot while the class is still short of
+  // spares there. What it lacks is now its spares, a gap that begins with
+  // the attempts this pass makes at it.
+  test("starts over when a probe restores the slot and spares are still short", async () => {
+    const withSpare: ScriptedClass = { ...cls, spares: 1 };
+    await at(0, withSpare);
+    expect(creations(await at(24, withSpare))).toBe(ATTEMPTING);
+    expect(creations(await at(25, withSpare))).toBe(PROBE_ONLY);
+
+    landings.unshift(MIA);
+    const restored = await at(26, withSpare);
+    expect(restored.created.map((o) => o.colo)).toEqual([MIA]);
+    expect(restored.spent).toHaveLength(ATTEMPTS);
+    expect(await gaps()).toEqual([gap(MIA, 26, 26, "spares")]);
+    expect(creations(await at(27, withSpare))).toBe(ATTEMPTING);
   });
 
   // A base slot's gap stays a gap while the primary is elsewhere, so its
