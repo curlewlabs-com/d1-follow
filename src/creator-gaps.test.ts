@@ -236,20 +236,42 @@ describe("pacing", () => {
 describe("the gap's record", () => {
   // A pass that cannot read where the primary is cannot say which colo the
   // attempts are for, nor whether a shortfall of spares is still one. It makes
-  // no attempts and leaves the record as it is, even when its probe has filled
-  // the colo; the next pass that reads the primary judges it.
-  test("is left alone while the primary cannot be read", async () => {
+  // no attempts and leaves such a record as it is; the next pass that reads
+  // the primary judges it.
+  test("leaves a shortfall of spares alone while the primary cannot be read", async () => {
+    await world.seed("scheduler-iad", IAD, T0_MS);
+    cls.where.set("scheduler-iad", IAD);
+    landings.splice(0, landings.length, ...Array(400).fill(IAD));
+    const withSpare: ScriptedClass = { ...cls, spares: 1 };
+    world.primary = { colo: ORD, region: "ENAM" };
+    expect(attempted(await at(0, withSpare))).toBe(ATTEMPTS);
+    expect(await gaps()).toEqual([gap(ORD, 0, 0, "spares")]);
+
+    world.primary = "fails";
+    expect(attempted(await at(1, withSpare))).toBe(0);
+    expect(await gaps()).toEqual([gap(ORD, 0, 0, "spares")]);
+  });
+
+  // The risk this guards: a missing slot filled while the primary cannot be
+  // read, and lost again before it can, would leave the record of the first
+  // gap standing, so the second would start old and its class would not
+  // probe on every pass. A missing slot the class now holds is closed, or a
+  // shortfall of spares, whatever the primary is, so the pass judges it.
+  test("closes a missing slot it sees filled while the primary cannot be read", async () => {
     expect(attempted(await at(0))).toBe(ATTEMPTS);
     world.primary = "fails";
     landings.unshift(MIA);
     const unread = await at(1);
     expect(attempted(unread)).toBe(0);
     expect(unread.created.map((o) => o.colo)).toEqual([MIA]);
-    expect(await gaps()).toEqual([gap(MIA, 0, 0)]);
-
-    world.primary = { colo: MIA, region: "ENAM" };
-    expect(attempted(await at(2))).toBe(0);
     expect(await gaps()).toEqual([]);
+
+    const name = unread.created[0]?.name ?? "";
+    cls.where.set(name, IAD);
+    const reopened = await at(30);
+    expect(reopened.unregistered.map((o) => o.name)).toEqual([name]);
+    expect(reopened.regionHintsProbed).toEqual(["enam"]);
+    expect(await gaps()).toEqual([gap(MIA, 30, null)]);
   });
 
   // A record outliving its gap would make the next gap there start old. So

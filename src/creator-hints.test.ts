@@ -243,8 +243,11 @@ describe("rounds", () => {
       atMs: T0_MS,
     });
     const report = await at(0);
-    expect(report.regionHintsProbed).toEqual(["enam"]);
+    expect(report.regionHintsProbed).toEqual([]);
     expect(report.wouldCreate).toEqual([SCHEDULER]);
+    expect(world.lines).toContain(
+      "[follow] scheduler dry-run - would probe through enam",
+    );
     expect(await waits()).toEqual([wait("enam", 48, 0)]);
   });
 
@@ -261,6 +264,27 @@ describe("rounds", () => {
     expect(report.regionHints).toEqual(["enam", "weur"]);
     expect(report.regionHintsProbed).toEqual(["weur"]);
     expect(await waits()).toEqual([wait("enam", 4, 3), wait("weur", 2, 2)]);
+  });
+});
+
+describe("a cap no longer than a pass", () => {
+  // A cap no longer than a pass paces nothing: every pass is a round and no
+  // wait is written, so a cap of zero cannot write a wait the schema refuses,
+  // and a cron that fires twice in a pass probes on both.
+  test.each([
+    ["of zero", 0],
+    ["of one pass", HOUR_MS],
+  ])("probes on every pass under a cap %s", async (_, capMs) => {
+    for (const hours of [0, 0.5, 1]) {
+      world.clock = T0_MS + hours * HOUR_MS;
+      const report = await world.pass(cls, {
+        maxBackoffMs: capMs,
+        laneCodes: [],
+      });
+      expect(report.regionHintsProbed).toEqual(["enam"]);
+      expect(report.failures).toEqual([]);
+    }
+    expect(await waits()).toEqual([]);
   });
 });
 
@@ -401,6 +425,26 @@ describe("fenced by the lease", () => {
     expect(report.spent).toHaveLength(1);
     expect(report.leaseLost).toBe(true);
     expect(await waits()).toEqual([]);
+  });
+
+  // A probe whose call was never made is no probe: a pass that loses its
+  // lease before making one reports none.
+  test("reports no probe a pass lost its lease before making", async () => {
+    const stealing: ScriptedClass = {
+      ...cls,
+      observe: async (name, hint) => {
+        if (name === "scheduler-ord") {
+          world.creator
+            .query("UPDATE follow_pass SET holder = 'next-pass'")
+            .run();
+        }
+        return await cls.observe(name, hint);
+      },
+    };
+    const report = await at(0, [stealing]);
+    expect(report.leaseLost).toBe(true);
+    expect(report.spent).toEqual([]);
+    expect(report.regionHintsProbed).toEqual([]);
   });
 });
 

@@ -27,12 +27,13 @@ interface PassClock {
 // What `wait` makes of the hint in the pass that began at `at.passStartMs`.
 // A wait longer than the cap, or due further ahead than its own length, is a
 // cap since lowered, a clock that ran backward or a hand edit; trusting it
-// could hold the probes back for as long as it says, so it is dropped.
+// could hold the probes back for as long as it says, so it is dropped. A cap
+// no longer than a pass paces nothing, so under one every pass is a round.
 export function paceHint(
   wait: HintWait | undefined,
   at: PassClock,
 ): HintPacing {
-  if (wait === undefined) {
+  if (wait === undefined || at.capMs <= at.passIntervalMs) {
     return { round: true, reason: "none", waitMs: null, dueAtMs: null };
   }
   if (wait.waitMs > at.capMs || wait.dueAtMs - at.passStartMs > wait.waitMs) {
@@ -46,12 +47,14 @@ export function paceHint(
 
 // The wait a round that taught nothing sets: twice the one it doubles, or two
 // passes for a hint that had none, so the first wait skips a single pass; at
-// most the cap. A cap no longer than a pass paces nothing.
+// most the cap. Null under a cap no longer than a pass, which paces nothing,
+// so no wait is written.
 export function nextHintWait(
   regionHint: string,
   pacing: HintPacing,
   at: PassClock,
-): HintWait {
+): HintWait | null {
+  if (at.capMs <= at.passIntervalMs) return null;
   const waitMs = Math.min(2 * (pacing.waitMs ?? at.passIntervalMs), at.capMs);
   return { regionHint, waitMs, dueAtMs: at.passStartMs + waitMs };
 }

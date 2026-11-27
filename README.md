@@ -458,7 +458,8 @@ young gap keeps probing on every pass.
 - **Thresholds, not timers.** A wait ends on the first pass that begins at or
   after it, less half a pass, as the attempts' thresholds do. The time between
   two rounds is a whole number of passes, can run up to a pass past the cap, and
-  runs longer when passes are missed. A cap no longer than a pass paces nothing.
+  runs longer when passes are missed. A cap no longer than a pass paces nothing:
+  every pass is a round, and no wait is written.
 - **State the pass cannot trust.** A wait longer than the cap, or due further
   ahead than its own length, is dropped and the round runs, so a cap since
   lowered, a clock that ran backward or a hand edit never silences the probes.
@@ -467,8 +468,9 @@ young gap keeps probing on every pass.
   that stalled and lost its lease cannot put back a wait the pass holding it
   deleted.
 - **Dry-run** makes no probe and writes no wait, and logs the hints it would
-  probe through. A pass's report names the hints it probed through
-  (`regionHintsProbed`), beside every hint the creator holds (`regionHints`).
+  probe through. A pass's report names the hints a class that acts probed
+  through (`regionHintsProbed`), beside every hint the creator holds
+  (`regionHints`).
 
 What the cap bounds is the cost of a steady day: a hint whose rounds teach
 nothing is probed once per class per cap, where it was probed once per class per
@@ -503,11 +505,11 @@ and one a day after.
   more. A gap's age is wall time from its first creation, whether or not later
   passes can create: a class in dry-run, or one with an attempt left open, makes
   no creation, and its gap ages all the same.
-- **Young again for the attempts.** A record no attempt has followed since it
-  began has paced no attempt: a probe began it while the primary was elsewhere,
-  or while the primary's region named no hint. The first pass that can attempt
-  the gap starts the record over, and the gap is young for its attempts from
-  then.
+- **Young again.** A record no attempt has followed since it began has paced no
+  attempt: a probe began it while the primary was elsewhere, or while the
+  primary's region named no hint. The first pass that can attempt the gap starts
+  the record over, and the gap is young again from then, for its class's probes
+  as for its attempts.
 - **Its end.** A pass deletes a gap's record when it sees the gap filled, or
   sees that the class no longer has it: a colo that is neither a candidate nor
   the primary's, or a shortfall of spares in a colo the primary has left. A gap
@@ -519,9 +521,11 @@ and one a day after.
   attempts once the slot beside the primary is lost too, and a probe that
   restores the slot leaves the remaining shortfall a fresh gap. The pass reads
   the gap after its probes, so a probe that changes it counts before any
-  attempt. A pass that cannot read where the primary is makes no attempts and
-  leaves every record as it is, since it cannot tell which colo the attempts are
-  for, or whether a shortfall of spares is still one.
+  attempt. A pass that cannot read where the primary is makes no attempts, since
+  it cannot tell which colo the attempts are for, or whether a shortfall of
+  spares is still one. It deletes only the record of a missing slot the class
+  now holds, which is closed or a shortfall of spares, a new gap either way, and
+  leaves every other record as it is.
 - **Thresholds, not timers.** Each threshold is read by a pass: it ends on the
   first pass that begins at or after it, less half a pass, so a cron that fires
   a little early is not taken for one that came too soon. The time between two

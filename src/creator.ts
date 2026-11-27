@@ -188,8 +188,8 @@ export interface CreatorPassReport {
   readonly regionHints: readonly string[];
   // Hints this pass added because the primary was seen in their region.
   readonly regionHintsAdded: readonly string[];
-  // The region hints any class probed through this pass, or would have in
-  // dry-run, in regionHints' order.
+  // The region hints a class that acts probed through this pass, in
+  // regionHints' order; what dry-run would probe through is in its log.
   readonly regionHintsProbed: readonly string[];
   // The colos the pass judged its gaps over: every candidate colo, and the
   // primary's colo while it is no candidate.
@@ -771,8 +771,8 @@ async function runLeasedPass(
   const made = new Set<string>();
   const usable = new Set<string>();
   const taught = new Set<string>();
-  // Reported as each probe is made, so a pass that stops partway reports the
-  // probes it made.
+  // Reported as each probe's call is made, so a pass that stops partway
+  // reports the probes it made.
   const probed = new Set<string>();
   const reportProbed = (hint: string): void => {
     probed.add(hint);
@@ -844,7 +844,6 @@ async function runLeasedPass(
       report.wouldCreate.push(cls.code);
       const young = youngGap();
       const hints = regionHints.filter((hint) => young || inRound(hint));
-      for (const hint of hints) reportProbed(hint);
       const paced = paceNow();
       const due = paced !== null && paced.pacing.due && primaryHint !== null;
       const note = waitNote();
@@ -908,13 +907,21 @@ async function runLeasedPass(
     // or gone from the class: a colo that is no candidate and no longer the
     // primary's, or a shortfall of spares in a colo the primary has left. A
     // gap that returns or changes kind is then a new one. A record the pass
-    // could not trust goes too when no creation replaced it. Each delete is
-    // guarded on the lease, so a pass that lost it cannot remove what the
-    // next one wrote, and stops on finding it lost.
+    // could not trust goes too when no creation replaced it. A pass that
+    // could not read the primary judges only a missing slot the class now
+    // holds, which is closed or a shortfall of spares, a new gap either way;
+    // it leaves every other record to a pass that reads the primary. Each
+    // delete is guarded on the lease, so a pass that lost it cannot remove
+    // what the next one wrote, and stops on finding it lost.
     const settleGaps = async (): Promise<void> => {
-      if (primary === null) return;
       for (const record of gapRecords.values()) {
         if (record.classCode !== cls.code) continue;
+        if (
+          primary === null &&
+          !(record.kind === "slot" && holds(cls.code, record.colo))
+        ) {
+          continue;
+        }
         const kind = gapIn(record.colo);
         const dropped =
           kind === record.kind && untrustedGap(record, passStartMs);
@@ -940,9 +947,11 @@ async function runLeasedPass(
     }
     // Makes one creation through `regionHint`, and resolves the colo it
     // answered from and whether that colo was already a candidate, or null
-    // when its answer was lost.
+    // when its answer was lost. `dispatched` runs as the creation's call is
+    // made.
     const attempt = async (
       regionHint: string,
+      dispatched?: () => void,
     ): Promise<{ colo: Colo | null; known: boolean } | null> => {
       await hold();
       const opId = deps.newOpId();
@@ -955,6 +964,7 @@ async function runLeasedPass(
       });
       let answer: { colo: Colo | null; known: boolean } | null = null;
       try {
+        dispatched?.();
         const { colo } = await call(() => cls.observe(name, regionHint));
         answer = { colo, known: colo !== null && candidates.has(colo) };
         const role = roleOf(cls, colo);
@@ -972,9 +982,10 @@ async function runLeasedPass(
     };
     for (const regionHint of regionHints) {
       if (!inRound(regionHint) && !youngGap()) continue;
-      reportProbed(regionHint);
       await recordProbe();
-      const answer = await attempt(regionHint);
+      const answer = await attempt(regionHint, () => {
+        reportProbed(regionHint);
+      });
       made.add(regionHint);
       if (answer === null || answer.colo === null) continue;
       usable.add(regionHint);
@@ -1005,6 +1016,7 @@ async function runLeasedPass(
     if (!pacing.round || !made.has(hint)) continue;
     if (usable.has(hint) && !taught.has(hint)) {
       const wait = nextHintWait(hint, pacing, clock);
+      if (wait === null) continue;
       if (!(await writeHintWait(db, wait, fence.holder))) throw new LeaseLost();
       log(
         `[follow] region hint ${hint}'s round taught nothing - its next round is a pass from ${new Date(passReading(wait.dueAtMs, config.passIntervalMs)).toISOString()}`,
