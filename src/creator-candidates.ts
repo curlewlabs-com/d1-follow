@@ -60,19 +60,23 @@ export class PassCandidates {
   // A creation that lands where no creation or slot has been is how the
   // creator learns Cloudflare places objects there. True when `colo` joined;
   // throws LeaseLost, having written nothing, when the pass lost its lease.
+  // The add counts as made once its batch is sent: a batch that committed
+  // and lost its answer has deleted every wait, which this pass must then
+  // not write again.
   async add(colo: Colo | null, atMs: number): Promise<boolean> {
     if (colo === null || this.colos.includes(colo)) {
       return false;
     }
+    this.added = true;
     if (!(await addCandidateColo(this.db, colo, atMs, this.holder))) {
       throw new LeaseLost();
     }
     this.colos.push(colo);
-    this.added = true;
     return true;
   }
 
-  // True once this pass has added a colo, and so deleted every hint's wait.
+  // True once this pass has sent a colo's add, which deletes every hint's
+  // wait.
   get addedAny(): boolean {
     return this.added;
   }

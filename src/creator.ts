@@ -16,7 +16,6 @@ import { PassCandidates, syncRegionHints } from "./creator-candidates";
 import {
   keepsProbing,
   paceAttempts,
-  passReading,
   untrustedGap,
   type AttemptPacing,
 } from "./creator-gaps";
@@ -52,6 +51,7 @@ import {
   writeHintWait,
 } from "./hint-wait-store";
 import { LANE_HANDOFF_SETTLE_MS } from "./lane";
+import { passReading } from "./pass-clock";
 import { claimPass, LeaseLost, releasePass, renewPass } from "./pass-lease";
 import { registerSpare, stampSpareVerified } from "./spare-store";
 import { readPrimary, type PrimaryPlacement } from "./primary-colo";
@@ -1015,24 +1015,27 @@ async function runLeasedPass(
   }
 
   // A round with a usable answer, every one from a colo already a candidate,
-  // doubles its hint's wait; a round with none leaves the wait as it was, and
-  // drops one the pass could not trust. Probes through a hint outside its
-  // round were made only for a young gap, and are no round. A pass that added
-  // a colo deleted every wait in the batch that added it, and writes none.
-  // Each write is guarded on the lease, so a pass that lost it cannot put back
-  // a wait the next pass deleted.
+  // doubles its hint's wait; a round with none leaves the wait as it was.
+  // Probes through a hint outside its round were made only for a young gap,
+  // and are no round. A wait the pass could not trust is dropped by any pass
+  // in which a class acts, whether or not one could probe; a pass with every
+  // class in dry-run writes none. A pass that added a colo deleted every wait
+  // in the batch that added it, and writes none. Each write is guarded on the
+  // lease, so a pass that lost it cannot put back a wait the next pass
+  // deleted.
+  const anyActs = config.classes.some(
+    (c) => modes.modeOf("class", c.code) === "act",
+  );
   for (const [hint, pacing] of candidates.addedAny ? [] : hintPacing) {
-    if (!pacing.round || !made.has(hint)) continue;
-    const wait =
-      usable.has(hint) && !taught.has(hint)
-        ? nextHintWait(hint, pacing, clock)
-        : null;
+    const taughtNothing =
+      pacing.round && made.has(hint) && usable.has(hint) && !taught.has(hint);
+    const wait = taughtNothing ? nextHintWait(hint, pacing, clock) : null;
     if (wait !== null) {
       if (!(await writeHintWait(db, wait, fence.holder))) throw new LeaseLost();
       log(
         `[follow] region hint ${hint}'s round taught nothing - its next round is a pass from ${new Date(passReading(wait.dueAtMs, config.passIntervalMs)).toISOString()}`,
       );
-    } else if (pacing.reason === "untrusted") {
+    } else if (pacing.reason === "untrusted" && anyActs) {
       if (!(await deleteHintWait(db, hint, fence.holder))) {
         throw new LeaseLost();
       }

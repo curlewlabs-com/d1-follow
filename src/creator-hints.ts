@@ -3,8 +3,8 @@
 // the cap, CreatorConfig.maxBackoffMs. A hint with no wait, or one whose wait
 // has passed, is in its round; a round that taught nothing doubles the wait,
 // from a single skipped pass up to the cap.
-import { passReading } from "./creator-gaps";
 import type { HintWait } from "./hint-wait-store";
+import { passReading, type PassClock } from "./pass-clock";
 
 export interface HintPacing {
   // True when the pass's probes through the hint are a round.
@@ -16,12 +16,6 @@ export interface HintPacing {
   readonly waitMs: number | null;
   // While the hint waits, the earliest start of a pass that is its round.
   readonly dueAtMs: number | null;
-}
-
-interface PassClock {
-  readonly passStartMs: number;
-  readonly capMs: number;
-  readonly passIntervalMs: number;
 }
 
 // What `wait` makes of the hint in the pass that began at `at.passStartMs`.

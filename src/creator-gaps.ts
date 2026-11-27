@@ -7,6 +7,7 @@
 // once old, it is attempted when the cap has passed since its last attempt,
 // and its class probes only in the hints' rounds (creator-hints.ts).
 import type { GapRecord } from "./gap-store";
+import { passReading, type PassClock } from "./pass-clock";
 
 export interface AttemptPacing {
   readonly due: boolean;
@@ -19,24 +20,6 @@ export interface AttemptPacing {
     "new" | "untrusted" | "restarted" | "young" | "old" | "waiting";
   // While the gap waits, the earliest start of a pass that attempts it.
   readonly dueAtMs: number | null;
-}
-
-interface PassClock {
-  readonly passStartMs: number;
-  readonly capMs: number;
-  readonly passIntervalMs: number;
-}
-
-// A threshold is read by a pass, never timed: it ends on the first pass that
-// begins at or after it, less half a pass, so a cron that fires a little early
-// is not taken for one that came too soon. The time between two passes a
-// threshold spaces is so a whole number of passes, and can run up to a pass
-// past it.
-export function passReading(
-  thresholdMs: number,
-  passIntervalMs: number,
-): number {
-  return thresholdMs - passIntervalMs / 2;
 }
 
 // A time ahead of the pass, or an attempt before the record began, is a clock

@@ -321,6 +321,31 @@ describe("a cap lowered to one pass and raised again", () => {
   });
 });
 
+describe("a cap lowered while no class can probe", () => {
+  // A wait longer than a lowered cap is dropped by a pass in which a class
+  // acts, even one whose open attempt keeps it from probing, so raising the
+  // cap again once the attempt resolves does not revive the old wait.
+  test("drops the wait, and the restored cap starts from none", async () => {
+    const lost: ScriptedClass = {
+      ...cls,
+      observe: (name, hint) =>
+        name === "scheduler-ord"
+          ? cls.observe(name, hint)
+          : Promise.reject(new Error("answer lost")),
+    };
+    await at(0, [lost]);
+    seedWait(wait("enam", 24, 20));
+    world.clock = T0_MS + HOUR_MS;
+    const blocked = await world.pass(lost, {
+      maxBackoffMs: HOUR_MS,
+      laneCodes: [],
+    });
+    expect(blocked.regionHintsProbed).toEqual([]);
+    expect(await waits()).toEqual([]);
+    expect((await at(2)).regionHintsProbed).toEqual(["enam"]);
+  });
+});
+
 describe("a wait the pass cannot trust", () => {
   // The risk this guards: a cap since lowered, a clock that ran backward or a
   // hand edit leaves a wait that would hold the probes back for as long as it
@@ -457,6 +482,29 @@ describe("fenced by the lease", () => {
     const report = await at(0);
     expect(report.spent).toHaveLength(1);
     expect(report.leaseLost).toBe(true);
+    expect(await waits()).toEqual([]);
+  });
+
+  // The risk this guards: the batch that adds a colo commits, deleting every
+  // wait, and its answer is lost. The pass must still count the colo as added,
+  // or it writes the waits of its other rounds again, and the next pass,
+  // already knowing the colo, never deletes them.
+  test("writes no wait after a colo add whose answer was lost", async () => {
+    seedHint("weur");
+    const learning = scriptedClass([ORD], { enam: [DEN], weur: [ORD] });
+    learning.where.set("scheduler-ord", ORD);
+    world.afterBatch = () => {
+      const learned = world.creator
+        .query("SELECT 1 FROM follow_colo WHERE colo = 'DEN'")
+        .get();
+      if (learned !== null) {
+        world.afterBatch = undefined;
+        throw new Error("answer lost");
+      }
+    };
+    const report = await at(0, [learning]);
+    expect(report.regionHintsProbed).toEqual(["enam", "weur"]);
+    expect(await readCandidateColos(world.handle())).toContain(DEN);
     expect(await waits()).toEqual([]);
   });
 
