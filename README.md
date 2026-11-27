@@ -339,14 +339,17 @@ invocations that overlap never fill the same gap twice:
   its number stays taken. Then it addresses the name with the hint and asks the
   new object where it is. An object that landed in a colo where its class has no
   slot becomes a slot: the creator has it write its placement marker, then
-  registers it with the intent's outcome in one batch. Any other object holds no
-  storage, so it ceases on its own, and the outcome records its name as spent.
-  An intent left without an outcome, by an answer lost on the way back, is
-  resolved on a later pass by observing the name. A pass that cannot resolve a
-  class's open attempt makes no creation for that class, probes included, so an
-  outage cannot grow the open attempts past what one pass opens, its probes and
-  attempts; its learning and refilling wait with it. The pass whose creations
-  first fail still makes the rest of them.
+  registers it with the intent's outcome in one batch. A batch that fails may
+  have committed with its reply lost, so the object keeps its marker and the
+  pass counts it as registered until the pass ends; the next pass finds it
+  registered, or resolves its open intent. Any other object holds no storage, so
+  it ceases on its own, and the outcome records its name as spent. An intent
+  left without an outcome, by an answer lost on the way back, is resolved on a
+  later pass by observing the name. A pass that cannot resolve a class's open
+  attempt makes no creation for that class, probes included, so an outage cannot
+  grow the open attempts past what one pass opens, its probes and attempts; its
+  learning and refilling wait with it. The pass whose creations first fail still
+  makes the rest of them.
 - **Fill the gap beside the primary.** When a class that acts has no slot in the
   primary's colo, or fewer spares there than it keeps, the pass spends the rest
   of the class's attempts there, through the hint for the primary's region,

@@ -290,6 +290,10 @@ export async function runCreatorPass(
   // For the same reason, no path empties a name in the pass whose call to it
   // failed: the late call could land after the release and leave a marker
   // nothing records. A later pass, once the deadline has passed, empties it.
+  // A registration batch that fails is held the same way: it carries no
+  // deadline, but keeping the lease to its lapse lets it land before the next
+  // pass resolves its name, where emptying and spending it would leave a
+  // registered object with no marker.
   const unsettled = new Set<string>();
   const settled = async <T>(
     name: string,
@@ -332,7 +336,12 @@ export async function runCreatorPass(
       { ...deps, config: { ...deps.config, classes: fenced } },
       report,
       hold,
-      { holder, deadline, settling: (name) => unsettled.has(name) },
+      {
+        holder,
+        deadline,
+        settling: (name) => unsettled.has(name),
+        unsettle: (name) => unsettled.add(name),
+      },
     );
   } catch (error) {
     if (!(error instanceof LeaseLost)) throw error;
@@ -341,7 +350,7 @@ export async function runCreatorPass(
   } finally {
     if (unsettled.size > 0) {
       deps.log(
-        "[follow] creator pass keeps its lease until it lapses - a call that failed may still land",
+        "[follow] creator pass keeps its lease until it lapses - a call or registration that failed may still land",
       );
     } else {
       await releaseLease(deps, holder);
@@ -397,7 +406,8 @@ async function releaseLease(
 // it. `fence.holder` is the lease's holder, which a guarded write names;
 // `fence.deadline` is the deadline each call that acts on an object
 // carries (CreatorClass.place); `fence.settling` names an object whose call
-// this pass failed and may still land, which nothing may empty this pass.
+// this pass failed and may still land, which nothing may empty this pass, and
+// `fence.unsettle` adds one.
 async function runLeasedPass(
   deps: CreatorPassDeps,
   report: ReturnType<typeof emptyReport>,
@@ -406,6 +416,7 @@ async function runLeasedPass(
     readonly holder: string;
     readonly deadline: () => number;
     readonly settling: (name: string) => boolean;
+    readonly unsettle: (name: string) => void;
   },
 ): Promise<void> {
   const { deadline } = fence;
@@ -600,17 +611,21 @@ async function runLeasedPass(
         kind: "created",
       });
     } catch (error) {
-      // Placed but not registered: a marked object outside the registry would
-      // never cease and never be released, so it is emptied, unless the keep
-      // list names it. Its intent stays open for a later pass either way.
-      if (await mayEmpty(name)) {
-        await call(() =>
-          cls.release(name, deadline()).catch((releaseError: unknown) => {
-            log(
-              `[follow] failed - empty unregistered ${name}: ${message(releaseError)}`,
-            );
-          }),
-        );
+      // A batch that fails may have committed with its reply lost, or may
+      // still land after a read of the row finds none, so no read now can
+      // show it was refused. The object keeps its marker, and this pass
+      // counts it as registered, so that no later creation this pass places a
+      // second slot in its colo or a spare past the count. The next pass
+      // reads the registry again: a registration that landed closed the
+      // intent and is verified like any new slot, and one that did not left
+      // the intent open, and resolving it keeps or empties the object. The
+      // pass keeps its lease to its lapse, so that pass comes after the batch.
+      fence.unsettle(name);
+      if (role === "spare") {
+        occupied.set(cls.code, (occupied.get(cls.code) ?? 0) + 1);
+      } else {
+        registry.set(name, slot);
+        held.set(cls.code, (held.get(cls.code) ?? new Set<Colo>()).add(colo));
       }
       throw error;
     }
