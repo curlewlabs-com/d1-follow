@@ -29,8 +29,23 @@ reproducible defects and proposals; use
 [private vulnerability reporting](SECURITY.md) for security concerns.
 
 Changes land through pull requests with passing CI and maintainer review. A
-change to a schema in `schema/` must be additive (README sec."Schema changes").
-Every dependency is pinned to an exact version.
+change to a table a release has shipped must be additive (README sec."Schema
+changes"). Every dependency is pinned to an exact version.
+
+## Stability before 1.0
+
+Before 1.0, a change may alter the package's interface: what its entry points
+export, by name, signature or type; the entry points `package.json` declares;
+and the values it puts on the wire and in its logs, such as a mode's name. A
+release keeps nothing for an earlier 0.x release's callers, so a change need not
+either. A release that carries such a change is a minor, never a patch, so it
+needs the approval [Releases](#releases) describes, and its notes say what
+changed.
+
+The schemas are narrower, because a database outlives the release that built it:
+a table a published release created changes only additively and keeps the
+meaning of the values it stores, while a table no release has shipped may change
+in any way until one does (README sec."Schema changes").
 
 ## Before a large change
 
@@ -51,8 +66,10 @@ needs the maintainer's explicit approval before its tag is pushed.
 1. Set `version` in `package.json` on `main`.
 2. Push the tag `vX.Y.Z` at that commit. The Release workflow runs CI, packs the
    tarball and opens a draft release with it attached.
-3. Check the draft, then publish it. Releases are immutable: a published
-   release's tag and assets cannot be changed, so a fix is a new version.
+3. Check the draft, add to its notes what changed since the last release - each
+   export, entry point, wire or log value, and table that changed - then publish
+   it. Releases are immutable: a published release's tag and assets cannot be
+   changed, so a fix is a new version.
 
 ## License
 
