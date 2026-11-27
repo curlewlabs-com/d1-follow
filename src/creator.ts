@@ -12,14 +12,13 @@
 import { readLaneChangesAfter, readLaneHolders } from "./app-lane-reads";
 import type { Colo } from "./colo";
 import { PassCandidates, syncRegionHints } from "./creator-candidates";
+import { paceAttempts } from "./creator-gaps";
 import { observeSlots } from "./creator-slots";
 import { observeSpares, settleSpares } from "./creator-spares";
 import {
   beginCreation,
   beginRelease,
-  clearBackoff,
   lastCopiedLaneSeq,
-  readBackoff,
   readModes,
   readOpenIntents,
   readReleaseDue,
@@ -28,12 +27,11 @@ import {
   recordReleased,
   recordSpentName,
   registerSlot,
-  setBackoff,
   stampVerified,
-  type Backoff,
   type Slot,
   type SqlDatabase,
 } from "./creator-store";
+import { deleteGap, readGaps, writeGap, type GapRecord } from "./gap-store";
 import { LANE_HANDOFF_SETTLE_MS } from "./lane";
 import { claimPass, releasePass, renewPass } from "./pass-lease";
 import { registerSpare, stampSpareVerified } from "./spare-store";
@@ -117,7 +115,9 @@ export interface CreatorConfig {
   readonly attemptsPerClassPerPass: number;
   // The time between passes, the creator's cron period.
   readonly passIntervalMs: number;
-  // The longest a class waits between passes that attempt the primary's gap.
+  // How long a gap in the primary's colo is attempted on every pass from its
+  // first attempt, and how far apart its attempts are after that (README
+  // sec."Pacing the attempts").
   readonly maxBackoffMs: number;
   // A slot or a spare stays registered while its last verification is younger
   // than this; one that cannot answer for longer leaves its table.
@@ -315,7 +315,7 @@ export async function runCreatorPass(
       { ...deps, config: { ...deps.config, classes: fenced } },
       report,
       hold,
-      { deadline, settling: (name) => unsettled.has(name) },
+      { holder, deadline, settling: (name) => unsettled.has(name) },
     );
   } catch (error) {
     if (!(error instanceof LeaseLost)) throw error;
@@ -376,7 +376,8 @@ async function releaseLease(
 }
 
 // `hold` renews the lease, and throws LeaseLost when another pass has taken
-// it. `fence.deadline` is the deadline each call that acts on an object
+// it. `fence.holder` is the lease's holder, which a guarded write names;
+// `fence.deadline` is the deadline each call that acts on an object
 // carries (CreatorClass.place); `fence.settling` names an object whose call
 // this pass failed and may still land, which nothing may empty this pass.
 async function runLeasedPass(
@@ -384,6 +385,7 @@ async function runLeasedPass(
   report: ReturnType<typeof emptyReport>,
   hold: () => Promise<void>,
   fence: {
+    readonly holder: string;
     readonly deadline: () => number;
     readonly settling: (name: string) => boolean;
   },
@@ -440,9 +442,6 @@ async function runLeasedPass(
     }
     return true;
   };
-  // A class that gained or lost a slot this pass starts its backoff over.
-  const changed = new Set<number>();
-
   // Every call to an object that acts goes through here: a creation, a
   // placement, a release, and the observe that resolves an attempt, whose
   // answer the pass acts on. A call can outlast the lease, and another pass
@@ -496,7 +495,6 @@ async function runLeasedPass(
   report.verified.push(...slots.verified);
   report.unregistered.push(...slots.unregistered);
   report.moved.push(...slots.moved);
-  for (const code of slots.changed) changed.add(code);
 
   const spares = await observeSpares({
     db,
@@ -527,7 +525,6 @@ async function runLeasedPass(
   report.sparesPromoted.push(...placedSpares.promoted);
   report.sparesUnregistered.push(...placedSpares.unregistered);
   const { occupied, ready } = placedSpares;
-  for (const p of placedSpares.promoted) changed.add(p.classCode);
 
   // Each class's registered colos, which creation fills around.
   const held = new Map<number, Set<Colo>>();
@@ -593,7 +590,6 @@ async function runLeasedPass(
       }
       throw error;
     }
-    changed.add(cls.code);
     if (role === "spare") {
       // Counted once registered, before its stamp: a stamp that fails must not
       // leave the class short in this pass's count, or the next creation would
@@ -704,27 +700,92 @@ async function runLeasedPass(
   // cannot grow the open attempts past one pass's worth; a pass's own failures
   // do not stop its remaining creations. A gap in the primary's colo also gets
   // the attempts left in the class's budget, through the hint for the
-  // primary's region when the primary names one, backing off while they find
-  // nothing to fill there.
-  const backoffs = await readBackoff(db);
-  // Classes whose backoff this loop settled, so the sweep after it leaves them.
-  const settled = new Set<number>();
+  // primary's region when the primary names one, as its record paces them
+  // (creator-gaps.ts).
+  const gapKey = (classCode: number, colo: Colo): string =>
+    `${classCode}:${colo}`;
+  const gapRecords = new Map<string, GapRecord>();
+  for (const record of await readGaps(db)) {
+    gapRecords.set(gapKey(record.classCode, record.colo), record);
+  }
   for (const cls of config.classes) {
     // The primary's colo is short while the class has no base slot there or
     // fewer spares than it keeps.
     const primaryGap = (): boolean =>
       primary !== null && (!holds(cls.code, primary.colo) || sparesShort(cls));
+    // A pass that could not read where the primary is cannot say which colo
+    // the attempts are for, so it makes none and judges no record.
+    const pacing =
+      primary === null
+        ? null
+        : paceAttempts(gapRecords.get(gapKey(cls.code, primary.colo)), {
+            passStartMs,
+            capMs: config.maxBackoffMs,
+            passIntervalMs: config.passIntervalMs,
+          });
+    // Only a hint the primary's own region names is attempted through: a
+    // region that names none would leave the attempts a guess, spending them
+    // for nothing, and begin a record that ages the gap before the right hint
+    // could reach it. Null when no attempt is due.
+    const primaryHint = primary?.regionHint ?? null;
+    const attemptHint = pacing?.due === true ? primaryHint : null;
+    const waitNote =
+      primary !== null &&
+      pacing !== null &&
+      pacing.dueAtMs !== null &&
+      primaryGap()
+        ? `the gap in ${primary.colo} is next attempted by a pass from ${new Date(pacing.dueAtMs).toISOString()}`
+        : null;
     if (modes.modeOf("class", cls.code) !== "act") {
       report.wouldCreate.push(cls.code);
       log(
-        `[follow] ${cls.label} dry-run - would probe through ${regionHints.join(",")}${primaryGap() && primary?.regionHint ? ` and attempt the gap in ${primary.colo}` : ""}`,
+        `[follow] ${cls.label} dry-run - would probe through ${regionHints.join(",")}${primaryGap() && attemptHint !== null && primary !== null ? ` and attempt the gap in ${primary.colo}` : ""}${waitNote === null ? "" : `; ${waitNote}`}`,
       );
       continue;
     }
+    if (primary !== null && pacing?.reason === "untrusted") {
+      log(
+        `[follow] ${cls.label} gap record in ${primary.colo} cannot be trusted - dropped`,
+      );
+    }
+    // A gap's record goes once a pass sees the gap filled, or sees the class
+    // no longer has it: a colo that is no candidate and no longer the
+    // primary's, or a shortfall of spares in a colo the primary has left. A
+    // gap that returns is then a new one. After attempting, the gap still
+    // open beside the primary records the attempt. Each write is guarded on
+    // the lease, so a pass that lost it cannot put back what the next one
+    // deleted.
+    const settleGaps = async (attempted: boolean): Promise<void> => {
+      if (primary === null || pacing === null) return;
+      const open = (colo: Colo): boolean =>
+        colo === primary.colo
+          ? primaryGap()
+          : candidates.has(colo) && !holds(cls.code, colo);
+      for (const record of gapRecords.values()) {
+        if (record.classCode !== cls.code || open(record.colo)) continue;
+        await deleteGap(db, record, fence.holder);
+        log(
+          `[follow] ${cls.label} gap in ${record.colo} closed - its record is deleted`,
+        );
+      }
+      if (!attempted || !primaryGap()) return;
+      const written = await writeGap(
+        db,
+        {
+          classCode: cls.code,
+          colo: primary.colo,
+          begunAtMs: pacing.begunAtMs,
+          attemptedAtMs: passStartMs,
+        },
+        fence.holder,
+      );
+      if (!written) throw new LeaseLost();
+    };
     if (unresolved.has(cls.code)) {
       log(
         `[follow] ${cls.label} has attempts still open - no new attempts this pass`,
       );
+      await settleGaps(false);
       continue;
     }
     const attempt = async (regionHint: string): Promise<void> => {
@@ -754,38 +815,17 @@ async function runLeasedPass(
     for (const regionHint of regionHints) {
       await attempt(regionHint);
     }
-    const backoff = backoffs.get(cls.code);
     let attempted = false;
-    // Only a hint the primary's own region names is attempted through: a
-    // region that names none would leave the attempts a guess, spending them
-    // for nothing and setting a wait the right hint would then sit out.
-    const primaryHint = primary?.regionHint ?? null;
-    if (
-      primaryHint !== null &&
-      (backoff === undefined || passStartMs >= backoff.nextAttemptAtMs)
-    ) {
+    if (attemptHint !== null) {
       const attempts = budget.get(cls.code) ?? 0;
       for (let i = 0; i < attempts && primaryGap(); i++) {
         attempted = true;
-        await attempt(primaryHint);
+        await attempt(attemptHint);
       }
+    } else if (primaryHint !== null && waitNote !== null) {
+      log(`[follow] ${cls.label} ${waitNote}`);
     }
-    // The wait belongs to a gap in the primary's colo. A pass that finds the
-    // class a slot there, or that gained or lost it a slot anywhere, starts it
-    // over; one that could not read where the primary is leaves it as it is.
-    settled.add(cls.code);
-    if (changed.has(cls.code) || (primary !== null && !primaryGap())) {
-      if (backoff !== undefined) {
-        await clearBackoff(db, cls.code);
-      }
-    } else if (attempted) {
-      await setBackoff(db, cls.code, nextBackoff(backoff, config, passStartMs));
-    }
-  }
-  for (const code of changed) {
-    if (!settled.has(code) && backoffs.has(code)) {
-      await clearBackoff(db, code);
-    }
+    await settleGaps(attempted);
   }
 
   // Release what has been out of the registry long enough and holds no lane.
@@ -890,24 +930,4 @@ async function runLeasedPass(
       );
     }
   }
-}
-
-// After a pass whose attempts at the primary's gap filled nothing, the next
-// pass to attempt it waits twice as long as the last wait, from a single
-// skipped pass up to the cap.
-// Half a period is taken off the target so a cron that fires a little early is
-// not taken for one that came too soon.
-function nextBackoff(
-  previous: Backoff | undefined,
-  config: CreatorConfig,
-  passStartMs: number,
-): Backoff {
-  const waitMs = Math.min(
-    previous === undefined ? 2 * config.passIntervalMs : 2 * previous.waitMs,
-    config.maxBackoffMs,
-  );
-  return {
-    waitMs,
-    nextAttemptAtMs: passStartMs + waitMs - config.passIntervalMs / 2,
-  };
 }

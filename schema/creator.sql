@@ -181,13 +181,31 @@ CREATE TABLE IF NOT EXISTS follow_region_hint (
   added_at_ms INTEGER NOT NULL
 ) STRICT;
 
--- A class whose attempts at a gap in the primary's colo found nothing to fill
--- waits before attempting there again, the wait doubling up to a cap. No row
--- means no wait.
+-- Each class's wait before attempting a gap in the primary's colo again, as
+-- builds before follow_gap paced those attempts. No pass reads or writes it now.
+-- It stays because a schema change here is additive only, and an older build
+-- deployed again reads it as before.
 CREATE TABLE IF NOT EXISTS follow_backoff (
   class_code INTEGER PRIMARY KEY CHECK (class_code > 0),
   wait_ms INTEGER NOT NULL CHECK (wait_ms > 0),
   next_attempt_at_ms INTEGER NOT NULL
+) STRICT;
+
+-- The gaps a pass has made a creation for (README sec."The creator: making and
+-- keeping slots"), which pace the attempts at the gap in the primary's colo. A
+-- class has a gap in each candidate colo where it has no slot, and in the
+-- primary's colo while it has no slot there or fewer spares than it keeps. A
+-- gap no pass has created for has no row. A pass deletes the row once it sees
+-- the gap filled or gone, so a gap that returns is a new one.
+CREATE TABLE IF NOT EXISTS follow_gap (
+  class_code INTEGER NOT NULL CHECK (class_code > 0),
+  colo TEXT NOT NULL CHECK (colo GLOB '[A-Z][A-Z][A-Z]'),
+  -- When the pass that made the gap's first creation began.
+  begun_at_ms INTEGER NOT NULL,
+  -- When the pass that last attempted the gap through the hint for the
+  -- primary's region began; null while none has since the row began.
+  attempted_at_ms INTEGER,
+  PRIMARY KEY (class_code, colo)
 ) STRICT;
 
 -- The creator's pass lease: one pass at a time, so overlapping invocations never

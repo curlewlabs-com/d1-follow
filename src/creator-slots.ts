@@ -45,14 +45,11 @@ export async function observeSlots(pass: {
   verified: string[];
   unregistered: ReportedObject[];
   moved: ReportedObject[];
-  // Classes that gained or lost a slot in a colo.
-  changed: Set<number>;
 }> {
   const { db, registry } = pass;
   const verified: string[] = [];
   const unregistered: ReportedObject[] = [];
   const moved: ReportedObject[] = [];
-  const changed = new Set<number>();
   const holdsBase = (classCode: number, colo: Colo): boolean =>
     [...registry.values()].some(
       (s) => s.classCode === classCode && s.colo === colo,
@@ -88,7 +85,6 @@ export async function observeSlots(pass: {
     }
     registry.set(slot.name, { ...slot, colo, verifiedAtMs: atMs });
     moved.push({ classCode: slot.classCode, name: slot.name, colo });
-    changed.add(slot.classCode);
     pass.log(
       `[follow] ${cls.label} slot ${slot.name} kept in ${colo}, where it moved from ${slot.colo}`,
     );
@@ -170,10 +166,9 @@ export async function observeSlots(pass: {
       name: slot.name,
       colo: slot.colo,
     });
-    changed.add(slot.classCode);
     pass.log(
       `[follow] ${cls.label} slot ${slot.name} left the registry - ${detail}`,
     );
   }
-  return { verified, unregistered, moved, changed };
+  return { verified, unregistered, moved };
 }

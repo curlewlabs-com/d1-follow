@@ -1,8 +1,16 @@
 // The creator pass's lease (schema/creator.sql's follow_pass): one row naming
 // the pass that holds it and until when, so invocations that overlap never fill
-// the same gap twice. It owns that table alone, and runs over the store's
-// statement handle (creator-store.ts's SqlDatabase).
+// the same gap twice. It owns that table alone, the condition other writes
+// guard on included, and runs over the store's statement handle
+// (creator-store.ts's SqlDatabase).
 import type { SqlDatabase } from "./creator-store";
+
+// True while the pass bound to its one parameter, the lease's holder, still
+// holds the lease. A write that a pass which lost its lease must not make
+// carries it in its own statement, so a pass that stalled cannot put back
+// state the pass now holding the lease changed.
+export const HOLDS_PASS_LEASE =
+  "EXISTS (SELECT 1 FROM follow_pass WHERE id = 1 AND holder = ?)";
 
 const PASS_LEASE_SQL = {
   // Takes the lease only when no claim stands; RETURNING is empty otherwise.

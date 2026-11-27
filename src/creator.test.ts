@@ -6,7 +6,6 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import type { Colo } from "./colo";
 import type { CreatorClass } from "./creator";
 import {
-  readBackoff,
   readOpenIntents,
   readReleasePending,
   readSlots,
@@ -23,6 +22,7 @@ import {
   T0_MS,
   scriptedClass,
 } from "./creator-test-harness";
+import { readGaps } from "./gap-store";
 import { addCandidateColo } from "./candidate-store";
 import { claimPass } from "./pass-lease";
 
@@ -112,8 +112,8 @@ describe("the pass lease", () => {
   });
 
   // A call that fails after another pass took the lease is no more this
-  // pass's to record than one that answered: its failure, and the backoff a
-  // fruitless pass would set, belong to whichever pass holds the lease.
+  // pass's to record than one that answered: its failure, and any gap record
+  // it would write, belong to whichever pass holds the lease.
   test("records nothing of a call that fails after the lease went", async () => {
     await world.act();
     const cls = scriptedClass([]);
@@ -132,7 +132,7 @@ describe("the pass lease", () => {
     const report = await world.pass(overtaken, { attemptsPerClassPerPass: 1 });
     expect(report.leaseLost).toBe(true);
     expect(report.failures).toEqual([]);
-    expect(await readBackoff(world.handle())).toEqual(new Map());
+    expect(await readGaps(world.handle())).toEqual([]);
   });
 
   test("records nothing of a release that fails after the lease went", async () => {
