@@ -18,11 +18,17 @@ export interface HintPacing {
   readonly dueAtMs: number | null;
 }
 
+// A cap paces nothing when even a wait of the whole cap would end by the next
+// pass, as the pass reads a threshold: at most a pass and a half.
+function pacesNothing(at: PassClock): boolean {
+  return passReading(at.capMs, at.passIntervalMs) <= at.passIntervalMs;
+}
+
 // What `wait` makes of the hint in the pass that began at `at.passStartMs`.
 // A wait longer than the cap, or due further ahead than its own length, is a
 // cap since lowered, a clock that ran backward or a hand edit; trusting it
-// could hold the probes back for as long as it says, so it is dropped. A cap
-// no longer than a pass paces nothing, so under one every pass is a round.
+// could hold the probes back for as long as it says, so it is dropped. Under
+// a cap that paces nothing every pass is a round.
 export function paceHint(
   wait: HintWait | undefined,
   at: PassClock,
@@ -33,7 +39,7 @@ export function paceHint(
   if (wait.waitMs > at.capMs || wait.dueAtMs - at.passStartMs > wait.waitMs) {
     return { round: true, reason: "untrusted", waitMs: null, dueAtMs: null };
   }
-  if (at.capMs <= at.passIntervalMs) {
+  if (pacesNothing(at)) {
     return { round: true, reason: "due", waitMs: null, dueAtMs: null };
   }
   const dueAtMs = passReading(wait.dueAtMs, at.passIntervalMs);
@@ -44,14 +50,13 @@ export function paceHint(
 
 // The wait a round that taught nothing sets: twice the one it doubles, or two
 // passes for a hint that had none, so the first wait skips a single pass; at
-// most the cap. Null under a cap no longer than a pass, which paces nothing,
-// so no wait is written.
+// most the cap. Null under a cap that paces nothing, so no wait is written.
 export function nextHintWait(
   regionHint: string,
   pacing: HintPacing,
   at: PassClock,
 ): HintWait | null {
-  if (at.capMs <= at.passIntervalMs) return null;
+  if (pacesNothing(at)) return null;
   const waitMs = Math.min(2 * (pacing.waitMs ?? at.passIntervalMs), at.capMs);
   return { regionHint, waitMs, dueAtMs: at.passStartMs + waitMs };
 }

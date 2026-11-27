@@ -282,13 +282,16 @@ describe("rounds", () => {
   });
 });
 
-describe("a cap no longer than a pass", () => {
-  // A cap no longer than a pass paces nothing: every pass is a round and no
+describe("a cap that paces nothing", () => {
+  // A cap no longer than a pass and a half paces nothing, since even a wait
+  // of the whole cap would end by the next pass: every pass is a round and no
   // wait is written, so a cap of zero cannot write a wait the schema refuses,
-  // and a cron that fires twice in a pass probes on both.
+  // a cron that fires twice in a pass probes on both, and no pass rewrites a
+  // wait that skips nothing.
   test.each([
     ["of zero", 0],
     ["of one pass", HOUR_MS],
+    ["of a pass and a half", 1.5 * HOUR_MS],
   ])("probes on every pass under a cap %s", async (_, capMs) => {
     for (const hours of [0, 0.5, 1]) {
       world.clock = T0_MS + hours * HOUR_MS;
@@ -300,6 +303,26 @@ describe("a cap no longer than a pass", () => {
       expect(report.failures).toEqual([]);
     }
     expect(await waits()).toEqual([]);
+  });
+
+  // Just past that boundary the first wait skips the next pass.
+  test("skips a pass under a cap just over a pass and a half", async () => {
+    const probedAt = async (hours: number): Promise<readonly string[]> => {
+      world.clock = T0_MS + hours * HOUR_MS;
+      return (
+        await world.pass(cls, { maxBackoffMs: 1.75 * HOUR_MS, laneCodes: [] })
+      ).regionHintsProbed;
+    };
+    expect(await probedAt(0)).toEqual(["enam"]);
+    expect(await probedAt(1)).toEqual([]);
+    expect(await probedAt(2)).toEqual(["enam"]);
+    expect(await waits()).toEqual([
+      {
+        regionHint: "enam",
+        waitMs: 1.75 * HOUR_MS,
+        dueAtMs: T0_MS + 3.75 * HOUR_MS,
+      },
+    ]);
   });
 });
 

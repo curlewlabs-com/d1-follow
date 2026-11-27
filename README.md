@@ -459,7 +459,8 @@ young gap keeps probing on every pass.
 - **Thresholds, not timers.** A wait ends on the first pass that begins at or
   after it, less half a pass, as the attempts' thresholds do. The time between
   two rounds is a whole number of passes, can run up to a pass past the cap, and
-  runs longer when passes are missed. A cap no longer than a pass paces nothing:
+  runs longer when passes are missed. A cap no longer than a pass and a half
+  paces nothing, since even a wait of the whole cap would end by the next pass:
   every pass is a round, and no wait is written.
 - **State the pass cannot trust.** A wait longer than the cap, or due further
   ahead than its own length, is dropped and the round runs, so a cap since
