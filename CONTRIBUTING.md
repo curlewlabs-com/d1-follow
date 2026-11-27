@@ -34,12 +34,12 @@ changes"). Every dependency is pinned to an exact version.
 
 ## Stability before 1.0
 
-Before 1.0, the package's interface may change in any release: the names its
-entry points export, the entry points `package.json` declares, and the values it
-puts on the wire and in its logs, such as a mode's name. A release keeps nothing
-for an earlier 0.x release's callers, so a change need not either; a release
-that changes the interface needs the approval [Releases](#releases) describes,
-and its notes say what changed.
+Before 1.0, a change may alter the package's interface: the names its entry
+points export, the entry points `package.json` declares, and the values it puts
+on the wire and in its logs, such as a mode's name. A release keeps nothing for
+an earlier 0.x release's callers, so a change need not either. A release that
+carries such a change is a minor, never a patch, so it needs the approval
+[Releases](#releases) describes, and its notes say what changed.
 
 The schemas are narrower, because a database outlives the release that built it:
 a table a published release created changes only additively, and a table no

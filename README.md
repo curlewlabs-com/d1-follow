@@ -40,8 +40,9 @@ keeps working; it just stops following the primary.
 
 **Status: 0.x, partly built.** Section [Status](#status) lists what exists and
 what is still design. 0.x releases make no compatibility promise to earlier 0.x
-releases: [CONTRIBUTING.md](CONTRIBUTING.md#stability-before-10) says what may
-change, and each release's notes say what did.
+releases;
+[CONTRIBUTING.md](https://github.com/curlewlabs-com/d1-follow/blob/main/CONTRIBUTING.md#stability-before-10)
+says what may change.
 
 ## Why it exists
 
@@ -790,16 +791,17 @@ or spare whose object no longer does. The census releases nothing.
 ## Schema changes
 
 The tool's schemas change rarely. A table a published release created changes
-only additively: a new nullable or defaulted column, a new index. Nothing in it
-is renamed, dropped or retyped, and no constraint is tightened on it while it
-holds rows, because a database that release built may exist. A new table is
-additive. So every deploy is windowless. A schema change lands ahead of the code
-that uses it, the build before it keeps working against the new schema, and
-rolling code back needs no database step. The app applies `lane.sql`'s changes
-through its own schema process, and the creator's deploy applies `creator.sql`
-whole on every deploy, which is why each statement in it is `IF NOT EXISTS`. A
-column added to a table that already exists needs a step of its own that the
-deploy runs only when the column is missing.
+only additively: a new nullable or defaulted column, a new index that is not
+unique. Nothing in it is renamed, dropped or retyped, and no constraint on it is
+tightened, because a database that release built may exist and that release's
+build may still write to it. A new table is additive. So every deploy is
+windowless. A schema change lands ahead of the code that uses it, the build
+before it keeps working against the new schema, and rolling code back needs no
+database step. The app applies `lane.sql`'s changes through its own schema
+process, and the creator's deploy applies `creator.sql` whole on every deploy,
+which is why each statement in it is `IF NOT EXISTS`. A column added to a table
+that already exists needs a step of its own that the deploy runs only when the
+column is missing.
 
 A table no release has shipped may change in any way until one does. The package
 is installed from its releases, so no database a release built holds that table
